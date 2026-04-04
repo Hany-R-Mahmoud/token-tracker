@@ -1,0 +1,19 @@
+{
+  "name": "token-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first token usage intelligence across AI coding tools.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc -b packages/core packages/cli apps/desktop apps/web",
+    "clean": "rm -rf packages/*/dist apps/*/dist",
+    "typecheck": "tsc -b packages/core packages/cli apps/desktop apps/web --pretty false"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.8.3"
+  }
+}
