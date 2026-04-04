@@ -174,7 +174,7 @@ Source:
 | Screenshot export | ✅ | ❌ | ❌ Clipboard only | **Trail** |
 | Clipboard export | ✅ | ❌ | ✅ Copy summary | **Parity** |
 | Leaderboard/social | ✅ Opt-in | ❌ | ❌ Not implemented | **Trail** |
-| Widget surface | ❌ | ✅ WidgetKit | ❌ Blocked (Swift) | **Trail** |
+| Widget surface | ❌ | ✅ WidgetKit | ⚠️ Tauri tray/menu bar (equivalent ambient value, no Home Screen widget) | **Trail** |
 | Menu bar glanceability | ✅ Tray app | ✅ Strong | ✅ Detailed/minimal modes | **Parity** |
 | Reset countdown | ✅ | ✅ First-class | ✅ Countdown | **Parity** |
 | Session/weekly meters | ✅ Quota-based | ✅ Quota-based | ⚠️ Heuristic (session-count, labeled) | **Trail*** |
@@ -215,8 +215,8 @@ while ours track session volume as a proxy.
 
 - **Screenshot export**: AI Token Monitor can screenshot to clipboard. We only have text copy.
 - **Leaderboard/social surface**: AI Token Monitor has opt-in leaderboard with GitHub auth. We have not implemented this.
-- **Widget surface**: CodexBar has WidgetKit widget. We documented the Swift/SwiftUI blocker.
-- **Provider breadth**: CodexBar supports 16+ providers. We support 2 (Codex, OpenCode) with 2 more in pipeline (Cursor: strategy pending, Claude: unavailable).
+- **Widget surface**: CodexBar has WidgetKit widget. We have a Tauri tray/menu bar that provides equivalent ambient monitoring value, but no Home Screen widget.
+- **Provider breadth**: CodexBar supports 16+ providers. We support 2 (Codex, OpenCode). Cursor and Claude are blocked pending validated data sources.
 - **True quota/session meters**: Our meters are session-count heuristics (labeled as such), not actual quota tracking like CodexBar.
 
 ### We Should Not Copy Blindly
@@ -225,6 +225,16 @@ while ours track session volume as a proxy.
 - Leaderboard / social comparison
 - Cloud-backed features that weaken the local-first thesis
 - Stack rewrites just to imitate a reference implementation
+
+## Meter Truth Comparison
+
+| Meter Type | AI Token Monitor | CodexBar | Token Tracker |
+|---|---|---|---|
+| True quota meters (provider rate limits) | ✅ Claude + Codex | ✅ 16+ providers | ⚠️ Codex only |
+| Reset window progress bars | ✅ | ✅ | ⚠️ Codex only (from rate limit data in session JSONL) |
+| Heuristic session volume meters | ❌ | ❌ | ✅ (clearly labeled as heuristic) |
+
+Token Tracker trails both reference products on true quota meter coverage. Only Codex sessions contain embedded rate limit data (`rateLimits.primary.used_percent`). OpenCode, Cursor, and Claude do not currently provide quota-backed reset window data in this repo. Heuristic session/weekly meters in the menubar are explicitly labeled as heuristic and measure session volume, not quota usage.
 
 ## Planning Guidance
 

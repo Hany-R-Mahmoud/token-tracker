@@ -16,18 +16,18 @@ The local-first MVP, productization, and monitoring UX slices are implemented:
 - **Analytics**: provider cost distribution, model token distribution, daily tokens/cost trends, model breakdown table, daily activity table
 - **Export**: local JSON export of normalized analytics (no raw prompts or transcripts) + SVG analytics summary card download
 - **Comparison**: manual-input comparison snapshots against reference apps (CodexBar, AI Token Monitor, Tokscale)
-- **Monitoring UX**: health indicator on menubar, per-provider reset progress bars, accessible filter form, human-readable reset context, file watching with configurable refresh cadence (1-60s, default 5s, persisted locally)
+- **Monitoring UX**: health indicator on menubar, per-provider reset progress bars (Codex only — from provider rate limit data; other providers show no reset bar), accessible filter form, human-readable reset context, file watching with configurable refresh cadence (1-60s, default 5s, persisted locally)
 - **Analytics**: configurable time window controls (default from preferences, 7/14/30/90-day override), activity heatmap, cache-efficiency visualization, copy-to-clipboard export
 - **Themes**: Dark mode toggle with localStorage persistence, CSS variable-based theme system
-- **Compact modes**: Detailed and minimal menubar modes with user toggle; session/weekly meters are heuristic (session-count-based, not quota tracking)
+- **Compact modes**: Detailed and minimal menubar modes with user toggle; session/weekly meters are heuristic (session-count-based, not quota tracking); reset progress bars are quota-backed for Codex only (from rate limit data in session JSONL)
 - **Provider status layer**: Incident status tracking (ok/degraded/incident/auth_needed/maintenance) surfaced in CLI doctor/providers, overview table (unpriced warnings), analytics distribution (unpriced notes), and menubar rows (incident badges)
 
 ## Provider Support
 
 | Provider | Status | Notes |
 |---|---|---|
-| Codex | ✅ Validated | Parses `~/.codex/sessions/*.jsonl` |
-| OpenCode | ✅ Validated | Reads `~/.local/share/opencode/opencode.db` |
+| Codex | ✅ Validated | Parses `~/.codex/sessions/*.jsonl`; includes rate limit data for true quota meters |
+| OpenCode | ✅ Validated | Reads `~/.local/share/opencode/opencode.db`; no quota data available |
 | Cursor | ⚠️ Strategy pending | Auth token accessible locally but no usage/quota/session API surface found — gRPC schema unknown |
 | Claude | ❌ Unavailable | No validated local session source |
 

@@ -131,41 +131,81 @@ export const PAGE_STYLES = `
 `;
 
 export const MENUBAR_STYLES = `
-  body { font-family: system-ui, -apple-system, sans-serif; max-width: 320px; margin: 0; padding: 10px 12px; color: #111827; background: #ffffff; font-size: 13px; line-height: 1.4; }
-  .header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
-  .header-title { font-size: 14px; font-weight: 600; flex: 1; }
-  .health-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  .health-dot-healthy { background: #22c55e; }
-  .health-dot-warn { background: #f59e0b; }
-  .health-dot-critical { background: #ef4444; }
-  .aggregate { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #f3f4f6; margin-bottom: 8px; font-size: 12px; color: #6b7280; }
-  .aggregate-value { font-weight: 500; color: #111827; }
-  .section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #9ca3af; margin: 8px 0 4px; }
-  .provider-row { display: flex; align-items: center; gap: 4px; padding: 3px 0; font-size: 12px; }
-  .provider-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-  .provider-dot-healthy { background: #22c55e; }
-  .provider-dot-warn { background: #f59e0b; }
-  .provider-dot-critical { background: #ef4444; }
-  .provider-name { flex: 1; color: #374151; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  .provider-sessions { color: #9ca3af; font-size: 11px; margin-right: 4px; }
-  .provider-cost { font-weight: 500; color: #111827; white-space: nowrap; }
-  .reset-bar-wrap { margin: 1px 0 5px 10px; height: 3px; background: #f3f4f6; border-radius: 2px; overflow: hidden; }
-  .reset-bar { height: 100%; border-radius: 2px; }
-  .reset-bar-healthy { background: #22c55e; }
-  .reset-bar-warn { background: #f59e0b; }
-  .reset-bar-critical { background: #ef4444; }
-  .unpriced-warn { color: #b45309; font-size: 10px; margin-left: 4px; }
-  .recent-item { display: flex; justify-content: space-between; align-items: baseline; padding: 2px 0; font-size: 12px; }
-  .recent-title { color: #374151; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
-  .recent-cost { color: #6b7280; font-size: 11px; margin-left: 8px; white-space: nowrap; }
-  .recent-time { color: #9ca3af; font-size: 10px; margin-left: 4px; white-space: nowrap; }
-  .action-link { display: block; text-align: center; margin-top: 10px; padding: 7px; background: #2563eb; color: #fff; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 500; }
-  .action-link:hover { background: #1d4ed8; }
-  .empty { color: #6b7280; font-size: 12px; text-align: center; padding: 16px 0; }
-  .error { color: #b91c1c; font-size: 12px; }
-  .unpriced-text { color: #b45309; font-size: 10px; margin-left: 4px; }
-  .incident-badge { font-size: 10px; margin-left: 2px; }
-  .menubar-label { color: #9ca3af; font-size: 10px; }
-  .mode-toggle { font-size: 14px; cursor: pointer; padding: 2px 4px; color: #fff; opacity: 0.7; }
-  .mode-toggle:hover { opacity: 1; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; width: 340px; margin: 0; padding: 0; color: #111827; background: #ffffff; font-size: 12px; line-height: 1.3; overflow-x: hidden; }
+  .mb-header { display: flex; align-items: center; gap: 6px; padding: 10px 12px 8px; border-bottom: 1px solid #f3f4f6; }
+  .mb-health-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .mb-health-dot-healthy { background: #22c55e; }
+  .mb-health-dot-warn { background: #f59e0b; }
+  .mb-health-dot-critical { background: #ef4444; }
+  .mb-title { font-size: 13px; font-weight: 600; flex: 1; }
+  .mb-mode-toggle { font-size: 12px; cursor: pointer; padding: 2px 4px; color: #9ca3af; }
+  .mb-mode-toggle:hover { color: #374151; }
+
+  /* Hero section */
+  .mb-hero { padding: 12px; border-bottom: 1px solid #f3f4f6; }
+  .mb-hero-cost { font-size: 22px; font-weight: 700; color: #111827; }
+  .mb-hero-meta { display: flex; gap: 12px; margin-top: 4px; font-size: 11px; color: #6b7280; }
+  .mb-effectiveness { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; padding: 3px 8px; border-radius: 9999px; font-size: 11px; font-weight: 500; }
+  .mb-effectiveness-efficient { background: #dcfce7; color: #166534; }
+  .mb-effectiveness-mixed { background: #fef3c7; color: #92400e; }
+  .mb-effectiveness-waste-heavy { background: #fee2e2; color: #991b1b; }
+
+  /* Consumption bars */
+  .mb-section { padding: 8px 12px; border-bottom: 1px solid #f3f4f6; }
+  .mb-section-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #9ca3af; margin-bottom: 6px; }
+  .mb-provider-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .mb-provider-bar-name { width: 50px; font-size: 11px; font-weight: 500; color: #374151; flex-shrink: 0; }
+  .mb-provider-bar-track { flex: 1; height: 6px; background: #f3f4f6; border-radius: 3px; overflow: hidden; }
+  .mb-provider-bar-fill { height: 100%; border-radius: 3px; }
+  .mb-provider-bar-cost { width: 52px; text-align: right; font-size: 11px; font-weight: 500; color: #111827; flex-shrink: 0; }
+
+  /* Effectiveness */
+  .mb-outcome-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; font-size: 11px; }
+  .mb-outcome-label { width: 60px; color: #6b7280; flex-shrink: 0; }
+  .mb-outcome-bar { flex: 1; height: 4px; background: #f3f4f6; border-radius: 2px; overflow: hidden; }
+  .mb-outcome-fill { height: 100%; border-radius: 2px; }
+  .mb-outcome-fill-success { background: #22c55e; }
+  .mb-outcome-fill-mixed { background: #f59e0b; }
+  .mb-outcome-fill-waste { background: #ef4444; }
+  .mb-outcome-count { width: 20px; text-align: right; color: #374151; font-weight: 500; flex-shrink: 0; }
+  .mb-efficiency-summary { display: flex; gap: 12px; margin-top: 6px; font-size: 11px; color: #6b7280; }
+  .mb-efficiency-summary span { display: flex; align-items: center; gap: 3px; }
+
+  /* Provider status */
+  .mb-provider-row { display: flex; align-items: center; gap: 4px; padding: 3px 0; font-size: 11px; }
+  .mb-provider-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .mb-provider-dot-healthy { background: #22c55e; }
+  .mb-provider-dot-warn { background: #f59e0b; }
+  .mb-provider-dot-critical { background: #ef4444; }
+  .mb-provider-name { flex: 1; color: #374151; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .mb-provider-cost { font-weight: 500; color: #111827; white-space: nowrap; }
+  .mb-provider-reset { color: #9ca3af; font-size: 10px; white-space: nowrap; }
+  .mb-reset-bar { margin: 2px 0 4px 10px; height: 3px; background: #f3f4f6; border-radius: 2px; overflow: hidden; }
+  .mb-reset-bar-fill { height: 100%; border-radius: 2px; }
+  .mb-reset-bar-healthy { background: #22c55e; }
+  .mb-reset-bar-warn { background: #f59e0b; }
+  .mb-reset-bar-critical { background: #ef4444; }
+
+  /* Recent activity */
+  .mb-recent-item { display: flex; justify-content: space-between; align-items: baseline; padding: 2px 0; font-size: 11px; }
+  .mb-recent-title { color: #374151; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+  .mb-recent-cost { color: #6b7280; font-size: 10px; margin-left: 6px; white-space: nowrap; }
+  .mb-recent-time { color: #9ca3af; font-size: 10px; margin-left: 4px; white-space: nowrap; }
+
+  /* Team preview */
+  .mb-team-row { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 2px 0; }
+  .mb-team-rank { font-weight: 600; color: #2563eb; width: 20px; }
+  .mb-team-label { color: #6b7280; }
+
+  /* Quick actions */
+  .mb-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 8px 12px 12px; }
+  .mb-action-btn { display: block; text-align: center; padding: 6px 8px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; color: #374151; text-decoration: none; font-size: 11px; font-weight: 500; }
+  .mb-action-btn:hover { background: #f3f4f6; text-decoration: none; }
+  .mb-action-btn-primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .mb-action-btn-primary:hover { background: #1d4ed8; }
+
+  /* States */
+  .mb-empty { padding: 24px 12px; text-align: center; color: #9ca3af; font-size: 12px; }
+  .mb-empty-icon { font-size: 24px; margin-bottom: 8px; }
 `;

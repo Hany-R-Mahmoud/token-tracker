@@ -1,3 +1,5 @@
+import type { SessionSummary } from '@ttm/core';
+
 export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -43,4 +45,21 @@ export function menubarRelativeTime(dateStr: string): string {
   const diffHr = Math.floor(diffMin / 60);
   if (diffHr < 24) return `${diffHr}h`;
   return `${Math.floor(diffHr / 24)}d`;
+}
+
+export function menubarProviderHealth(summary: SessionSummary): 'healthy' | 'warn' | 'critical' {
+  if (summary.resetWindowRemainingPercent !== null) {
+    if (summary.resetWindowRemainingPercent < 0.20) return 'critical';
+    if (summary.resetWindowRemainingPercent < 0.50) return 'warn';
+  }
+  if (summary.unpricedSessions > 0) return 'warn';
+  return 'healthy';
+}
+
+export function menubarOverallHealth(summaries: SessionSummary[]): 'healthy' | 'warn' | 'critical' {
+  if (summaries.length === 0) return 'warn';
+  const statuses = summaries.map(menubarProviderHealth);
+  if (statuses.includes('critical')) return 'critical';
+  if (statuses.includes('warn')) return 'warn';
+  return 'healthy';
 }

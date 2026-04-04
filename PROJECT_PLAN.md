@@ -127,10 +127,10 @@ Tauri v2 macOS app wrapping the desktop shell:
 | Phase 7 — Monitoring And Glanceable UX | ✅ Complete (health indicators, reset clarity, analytics visuals, filter polish, live refresh, preferences) |
 | Phase 004a — Repair & Live Monitoring | ✅ Complete (16/16 tasks: file watching, refresh state, countdown UX, session/weekly meters, file refactor, preferences) |
 | Phase 004b — Analytics & Theme Parity | ⚠️ Partial (7/8 tasks: time windows, heatmap, cache viz, dark mode, clipboard export, accessibility; B006 leaderboard blocked) |
-| Phase 004c — Ambient Surfaces | ⚠️ Partial (5/6 tasks: detailed/minimal modes, live sync; C004 widget blocked — requires Swift/SwiftUI) |
+| Phase 004c — Ambient Surfaces | ✅ Complete (detailed/minimal modes, live sync; C004 drawer deferred to 006c)
 | Phase 004d — Provider Status Layer | ⚠️ Partial (4/7 tasks: status model, desktop surfacing, honest unsupported providers; D001/D002/D005 provider expansion blocked — no validated sources) |
 | Phase 005 — Team Leaderboard | ⚠️ Partial (foundation ✅, computation ✅, UI ⚠️ (C004 deferred), hardening ✅, tests ✅; member detail drawer still open) |
-| Phase 006 — Open Gaps And Hardening | ⚠️ In progress (006b production OAuth/session hardening complete; screenshot export, member drawer, true meters, provider closure, widget shell remain) |
+| Phase 006 — Open Gaps And Hardening | ✅ Complete (006a screenshot export, 006c member drawer, 006d true meters, 006e provider closure, 006f native widget feasibility — all resolved)
 | Phase 8 — Optional Cloud Layer | ⏭️ Not started |
 
 ## Blocked / Deferred
@@ -138,7 +138,7 @@ Tauri v2 macOS app wrapping the desktop shell:
 | Item | Status | Blocker |
 |---|---|---|
 | B006 Leaderboard/social | ⚠️ Partial | Private team leaderboard shipped; real OAuth/session handling shipped; member detail drawer still deferred
-| C004 Widget surface | ❌ Blocked | Requires Swift/SwiftUI + WidgetKit — not feasible in Node.js/Tauri |
+| WidgetKit widget | ❌ Not implemented | Tauri tray/menu bar provides equivalent ambient monitoring value; WidgetKit would require parallel Swift/Xcode build system
 | D001 Provider source research | ❌ Blocked | No validated local sources for Claude, Gemini, Copilot on this machine |
 | D002 Highest-confidence provider | ❌ Blocked | Depends on D001 |
 | D005 Additional providers | ❌ Blocked | Depends on D001 |

@@ -14,7 +14,8 @@ import type {
   DailyBucket,
 } from '@ttm/core';
 import { PAGE_STYLES, MENUBAR_STYLES } from './styles.js';
-import { escapeHtml, formatNumber, buildCountdownStr, menubarRelativeTime } from './helpers.js';
+import { escapeHtml, formatNumber, buildCountdownStr, menubarRelativeTime, menubarProviderHealth, menubarOverallHealth } from './helpers.js';
+import { buildMenubarHtml } from './menubar.js';
 import { loadPreferences, savePreferences, type MonitoringPreferences } from './preferences.js';
 
 const PORT = Number(process.env.TTM_DESKTOP_PORT ?? '3100');
@@ -52,7 +53,7 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
     ? sessions.map((session) => buildSessionRow(session)).join('\n')
     : '<tr><td colspan="6" class="empty">no sessions to display</td></tr>';
 
-  const paginationHtml = listResult && listResult.totalPages > 1
+  const paginationHtml = listResult
     ? buildPaginationHtml(listResult, activeProvider, activeModel, activeQ)
     : '';
 
@@ -71,10 +72,9 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
     <a href="/analytics">Analytics</a>
     <a href="/menubar">Menubar</a>
     <span class="refresh-indicator" id="refresh-state" title="Auto-refresh: watching database"></span>
-    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode" title="Toggle theme">🌓</button>
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button>
   </nav>
   <main>
-
   <h1>Overview</h1>
   <p class="subtitle">Database: <code>${escapeHtml(snapshot.databasePath)}</code></p>
 
@@ -93,16 +93,11 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
     </div>
   </div>
 
-  <div class="section">
-    <h2>Provider Summaries</h2>
-    <table>
-      <thead><tr><th>Provider</th><th>Sessions</th><th>Total Tokens</th><th>Cost (USD)</th><th>Reset</th><th>Avg Efficiency</th></tr></thead>
-      <tbody>${providerRows}</tbody>
-    </table>
-  </div>
+  ${buildFilterStateHtml(activeProvider, activeModel, activeQ, listResult)}
 
-  <div class="filter-section">
-    <form method="get" action="/" class="filter-form" role="search" aria-label="Filter sessions">
+  <div class="section">
+    <h2>Filter Sessions</h2>
+    <form method="get" action="/" class="filter-form">
       <label class="filter-label">Provider
         <select name="provider">
           <option value="">All providers</option>
@@ -119,7 +114,16 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
         <input type="text" name="q" placeholder="Search title, session ID..." value="${escapeHtml(activeQ ?? '')}">
       </label>
       <button type="submit">Filter</button>
+      ${activeProvider || activeModel || activeQ ? '<a href="/" class="clear-link">Clear</a>' : ''}
     </form>
+  </div>
+
+  <div class="section">
+    <h2>Provider Summaries</h2>
+    <table>
+      <thead><tr><th>Provider</th><th>Sessions</th><th>Total Tokens</th><th>Cost (USD)</th><th>Reset</th><th>Avg Efficiency</th></tr></thead>
+      <tbody>${providerRows}</tbody>
+    </table>
   </div>
 
   <div class="section">
@@ -132,22 +136,22 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
 
   ${paginationHtml}
 
-  <p class="footer-note">Data is local-only. Run <code>ttm import</code> to refresh. <a href="/analytics">View analytics</a></p>
+  <p class="footer-note">
+    <a href="/export/analytics-svg" class="copy-btn" style="background:#16a34a;text-decoration:none">📥 Download SVG</a>
+    <button class="copy-btn" onclick="copyAnalyticsSummary()">📋 Copy text</button>
+  </p>
   <script>
+    function copyAnalyticsSummary() {
+      var text = document.querySelector('.analytics-group')?.innerText || '';
+      var stats = document.querySelector('.stats-row')?.innerText || '';
+      var summary = 'Token Tracker Analytics\n' + stats.trim() + '\n\n' + text.trim();
+      navigator.clipboard.writeText(summary).then(function() {
+        var btn = document.querySelector('.copy-btn');
+        if (btn) { btn.textContent = '✓ Copied'; setTimeout(function() { btn.textContent = '📋 Copy text'; }, 2000); }
+      }).catch(function() {});
+    }
+
     (function() {
-      // Theme toggle
-      var savedTheme = localStorage.getItem('ttm-theme');
-      if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
-      var toggle = document.getElementById('theme-toggle');
-      if (toggle) {
-        toggle.addEventListener('click', function() {
-          var current = document.documentElement.getAttribute('data-theme');
-          var next = current === 'dark' ? 'light' : 'dark';
-          document.documentElement.setAttribute('data-theme', next);
-          localStorage.setItem('ttm-theme', next);
-        });
-      }
-      // Refresh state
       function updateRefreshState() {
         fetch('/api/refresh').then(function(r) { return r.json(); }).then(function(state) {
           var el = document.getElementById('refresh-state');
@@ -162,35 +166,24 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
       updateRefreshState();
       setInterval(updateRefreshState, 5000);
     })();
+
+    (function() {
+      var savedTheme = localStorage.getItem('ttm-theme');
+      if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+      var toggle = document.getElementById('theme-toggle');
+      if (toggle) {
+        toggle.addEventListener('click', function() {
+          var current = document.documentElement.getAttribute('data-theme');
+          var next = current === 'dark' ? 'light' : 'dark';
+          document.documentElement.setAttribute('data-theme', next);
+          localStorage.setItem('ttm-theme', next);
+        });
+      }
+    })();
   </script>
   </main>
 </body>
 </html>`;
-}
-
-function buildPaginationHtml(listResult: { total: number; page: number; pageSize: number; totalPages: number }, activeProvider: string | null, activeModel: string | null, activeQ: string | null): string {
-  const params = new URLSearchParams();
-  if (activeProvider) params.set('provider', activeProvider);
-  if (activeModel) params.set('model', activeModel);
-  if (activeQ) params.set('q', activeQ);
-
-  const prevPage = listResult.page > 1 ? listResult.page - 1 : null;
-  const nextPage = listResult.page < listResult.totalPages ? listResult.page + 1 : null;
-
-  const prevUrl = prevPage !== null ? `/?page=${prevPage}${params.toString() ? '&' + params.toString() : ''}` : null;
-  const nextUrl = nextPage !== null ? `/?page=${nextPage}${params.toString() ? '&' + params.toString() : ''}` : null;
-
-  const start = (listResult.page - 1) * listResult.pageSize + 1;
-  const end = Math.min(listResult.page * listResult.pageSize, listResult.total);
-
-  return `<div class="pagination" role="navigation" aria-label="Pagination">
-    <span class="page-info">Showing ${start}–${end} of ${listResult.total} sessions</span>
-    <div class="pagination-nav">
-      ${prevUrl ? `<a href="${prevUrl}">&larr; Prev</a>` : '<span class="disabled">&larr; Prev</span>'}
-      <span class="page-info">${listResult.page} / ${listResult.totalPages}</span>
-      ${nextUrl ? `<a href="${nextUrl}">Next &rarr;</a>` : '<span class="disabled">Next &rarr;</span>'}
-    </div>
-  </div>`;
 }
 
 function buildProviderRow(summary: SessionSummary): string {
@@ -210,7 +203,7 @@ function buildProviderRow(summary: SessionSummary): string {
 
 function buildResetCell(summary: SessionSummary): string {
   if (summary.resetWindowRemainingPercent === null && summary.resetWindowKind === null) {
-    return '<span class="empty">—</span>';
+    return '<span class="reset-cell">—</span>';
   }
 
   const parts: string[] = [];
@@ -240,107 +233,71 @@ function buildSessionRow(session: StoredSessionListItem): string {
   </tr>`;
 }
 
-function buildDetailHtml(session: StoredSessionDetail): string {
-  const costDisplay = session.pricingSnapshotId === null
-    ? '<span class="badge badge-unknown">unknown pricing</span>'
-    : `$${session.costTotalUsd.toFixed(2)}`;
+function buildFilterStateHtml(activeProvider: string | null, activeModel: string | null, activeQ: string | null, listResult: { total: number } | null): string {
+  const hasFilters = activeProvider || activeModel || activeQ;
+  if (!hasFilters) return '';
 
-  const factorsHtml = session.scoreFactors.length > 0
-    ? `<ul class="factor-list">${session.scoreFactors.map((f) => {
-        const cls = f.direction === 'positive' ? 'factor-positive' : f.direction === 'negative' ? 'factor-negative' : 'factor-neutral';
-        return `<li class="factor-item ${cls}">${escapeHtml(f.label)} (impact: ${f.impact})</li>`;
-      }).join('')}</ul>`
-    : '<p class="empty">No explanation factors recorded for this session.</p>';
+  const pills: string[] = [];
+  if (activeProvider) pills.push(`<span class="filter-pill">provider: ${escapeHtml(activeProvider)}</span>`);
+  if (activeModel) pills.push(`<span class="filter-pill">model: ${escapeHtml(activeModel)}</span>`);
+  if (activeQ) pills.push(`<span class="filter-pill">search: ${escapeHtml(activeQ)}</span>`);
 
-  const outcomeReasonsHtml = session.outcomeReasons.length > 0
-    ? `<ul>${session.outcomeReasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>`
-    : '<p class="empty">No outcome reasons recorded.</p>';
-
-  const wasteReasonsHtml = session.wasteReasons.length > 0
-    ? `<ul>${session.wasteReasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>`
-    : '<p class="empty">No waste reasons recorded.</p>';
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Token Tracker — ${escapeHtml(session.title ?? session.providerSessionId)}</title>
-<style>${PAGE_STYLES}</style>
-</head>
-<body>
-  <nav class="nav">
-    <span class="nav-brand">Token Tracker</span>
-    <a href="/">Overview</a>
-    <a href="/analytics">Analytics</a>
-    <a href="/menubar">Menubar</a>
-  </nav>
-  <main>
-  <a class="back-link-spaced" href="/">&larr; Back to overview</a>
-  <h1>${escapeHtml(session.title ?? '<untitled>')}</h1>
-  <p class="subtitle">${escapeHtml(session.provider)} / ${escapeHtml(session.model ?? 'unknown')} / ${escapeHtml(session.providerSessionId)}</p>
-
-  <div class="detail-grid">
-    <div class="detail-label">Started</div><div class="detail-value">${escapeHtml(session.startedAt)}</div>
-    <div class="detail-label">Duration</div><div class="detail-value">${session.durationMs !== null ? `${(session.durationMs / 1000).toFixed(0)}s` : 'n/a'}</div>
-    <div class="detail-label">Project</div><div class="detail-value">${session.projectPath ? escapeHtml(session.projectPath) : '<span class="empty">unknown</span>'}</div>
-    <div class="detail-label">Tokens</div><div class="detail-tokens"><span class="detail-token-item"><span class="detail-token-label">input:</span> ${formatNumber(session.tokenInput)}</span><span class="detail-token-item"><span class="detail-token-label">output:</span> ${formatNumber(session.tokenOutput)}</span><span class="detail-token-item"><span class="detail-token-label">cached:</span> ${formatNumber(session.tokenCachedInput)}</span><span class="detail-token-item"><span class="detail-token-label">reasoning:</span> ${formatNumber(session.tokenReasoning)}</span><span class="detail-token-item"><span class="detail-token-label">total:</span> ${formatNumber(session.tokenTotal)}</span></div>
-    <div class="detail-label">Cost</div><div class="detail-value">${costDisplay}</div>
-    <div class="detail-label">Cache Hit Rate</div><div class="detail-value">${session.cacheHitRate !== null ? `${(session.cacheHitRate * 100).toFixed(1)}%` : 'n/a'}</div>
-    <div class="detail-label">Efficiency</div><div class="detail-value">${session.efficiencyScore !== null ? session.efficiencyScore.toFixed(0) : 'n/a'}</div>
-    <div class="detail-label">Waste</div><div class="detail-value">${session.wasteScore !== null ? session.wasteScore.toFixed(0) : 'n/a'}</div>
-    <div class="detail-label">Outcome</div><div class="detail-value">${escapeHtml(session.outcome)} (confidence: ${session.outcomeConfidence !== null ? session.outcomeConfidence.toFixed(2) : 'n/a'})</div>
-    <div class="detail-label">Task Category</div><div class="detail-value">${escapeHtml(session.taskCategory)} (confidence: ${session.taskCategoryConfidence !== null ? session.taskCategoryConfidence.toFixed(2) : 'n/a'})</div>
-    <div class="detail-label">Loop Count</div><div class="detail-value">${session.loopCount}</div>
-    <div class="detail-label">Anomaly Score</div><div class="detail-value">${session.anomalyScore !== null ? session.anomalyScore.toFixed(2) : 'n/a'}</div>
-  </div>
-
-  <div class="section">
-    <h3>Outcome Reasons</h3>
-    ${outcomeReasonsHtml}
-  </div>
-
-  <div class="section">
-    <h3>Waste Reasons</h3>
-    ${wasteReasonsHtml}
-  </div>
-
-  <div class="section">
-    <h3>Score Factors</h3>
-    ${factorsHtml}
-  </div>
-  </main>
-</body>
-</html>`;
+  return `<div class="active-filters">${pills.join('')}<a href="/" class="clear-link">Clear all</a></div>`;
 }
 
-function buildNotFoundHtml(sessionId: string): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Token Tracker — Not Found</title><style>${PAGE_STYLES}</style></head>
-<body>
-  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a></nav>
-  <main><a class="back-link-spaced" href="/">&larr; Back to overview</a><h1>Session Not Found</h1><p class="empty">No session found with id <code>${escapeHtml(sessionId)}</code>.</p></main>
-</body></html>`;
+function buildPaginationHtml(listResult: { total: number; page: number; pageSize: number; totalPages: number }, activeProvider: string | null, activeModel: string | null, activeQ: string | null): string {
+  const params = new URLSearchParams();
+  if (activeProvider) params.set('provider', activeProvider);
+  if (activeModel) params.set('model', activeModel);
+  if (activeQ) params.set('q', activeQ);
+
+  const prevPage = listResult.page > 1 ? listResult.page - 1 : null;
+  const nextPage = listResult.page < listResult.totalPages ? listResult.page + 1 : null;
+
+  const prevUrl = prevPage !== null ? `/?page=${prevPage}${params.toString() ? '&' + params.toString() : ''}` : null;
+  const nextUrl = nextPage !== null ? `/?page=${nextPage}${params.toString() ? '&' + params.toString() : ''}` : null;
+
+  const start = (listResult.page - 1) * listResult.pageSize + 1;
+  const end = Math.min(listResult.page * listResult.pageSize, listResult.total);
+
+  return `<div class="pagination">
+    <span class="page-info">Showing ${start}–${end} of ${listResult.total} sessions</span>
+    <div class="pagination-nav">
+      ${prevUrl ? `<a href="${prevUrl}">&larr; Prev</a>` : '<span class="disabled">&larr; Prev</span>'}
+      <span class="page-info">${listResult.page} / ${listResult.totalPages}</span>
+      ${nextUrl ? `<a href="${nextUrl}">Next &rarr;</a>` : '<span class="disabled">Next &rarr;</span>'}
+    </div>
+  </div>`;
 }
 
 function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number): string {
-  const totalCost = analytics.providerSummaries.reduce((sum, p) => sum + p.totalCostUsd, 0);
   const totalTokens = analytics.providerSummaries.reduce((sum, p) => sum + p.totalTokens, 0);
+  const totalCost = analytics.providerSummaries.reduce((sum, p) => sum + p.totalCostUsd, 0);
 
-  const dailyBuckets = analytics.dailyBuckets.slice(0, 14).reverse();
+  const maxProviderCost = Math.max(...analytics.providerSummaries.map((p) => p.totalCostUsd), 0.01);
+  const providerDistBars = analytics.providerSummaries.map((p) => {
+    const width = Math.max(2, (p.totalCostUsd / maxProviderCost) * 100);
+    return `<div class="chart-row"><div class="chart-bar"><span>${escapeHtml(p.provider)}</span><span>$${p.totalCostUsd.toFixed(2)}</span></div><div class="bar" style="width:${Math.round(width)}%"></div></div>`;
+  }).join('\n');
+
+  const maxModelTokens = Math.max(...analytics.modelSummaries.map((m) => m.totalTokens), 1);
+  const modelDistBars = analytics.modelSummaries.slice(0, 10).map((m) => {
+    const width = Math.max(2, (m.totalTokens / maxModelTokens) * 100);
+    return `<div class="chart-row"><div class="chart-bar"><span>${escapeHtml(m.model)}</span><span>${formatNumber(m.totalTokens)}</span></div><div class="bar" style="width:${Math.round(width)}%;background:#7c3aed"></div></div>`;
+  }).join('\n');
+
+  const dailyBuckets = analytics.dailyBuckets.slice(-14);
   const maxDailyTokens = Math.max(...dailyBuckets.map((d) => d.totalTokens), 1);
   const maxDailyCost = Math.max(...dailyBuckets.map((d) => d.totalCostUsd), 0.01);
 
   const tokenChartBars = dailyBuckets.map((d) => {
     const width = Math.max(2, (d.totalTokens / maxDailyTokens) * 100);
-    return `<div class="chart-row"><div class="bar" style="width:${Math.round(width)}%" role="img" aria-label="${d.date}: ${formatNumber(d.totalTokens)} tokens" title="${d.date}: ${formatNumber(d.totalTokens)} tokens"></div><div class="chart-label">${d.date} — ${formatNumber(d.totalTokens)} tokens</div></div>`;
+    return `<div class="chart-row"><div class="bar" style="width:${Math.round(width)}%" title="${d.date}: ${formatNumber(d.totalTokens)} tokens"></div><div class="bar-label">${d.date} — ${formatNumber(d.totalTokens)} tokens</div></div>`;
   }).join('\n');
 
   const costChartBars = dailyBuckets.map((d) => {
     const width = Math.max(2, (d.totalCostUsd / maxDailyCost) * 100);
-    return `<div class="chart-row"><div class="bar" style="width:${Math.round(width)}%;background:#16a34a" role="img" aria-label="${d.date}: $${d.totalCostUsd.toFixed(2)}" title="${d.date}: $${d.totalCostUsd.toFixed(2)}"></div><div class="chart-label">${d.date} — $${d.totalCostUsd.toFixed(2)}</div></div>`;
+    return `<div class="chart-row"><div class="bar" style="width:${Math.round(width)}%;background:#16a34a" title="${d.date}: $${d.totalCostUsd.toFixed(2)}"></div><div class="bar-label">${d.date} — $${d.totalCostUsd.toFixed(2)}</div></div>`;
   }).join('\n');
 
   const dailyRows = dailyBuckets.map((d) => {
@@ -353,41 +310,16 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
     </tr>`;
   }).join('\n');
 
-  const maxProviderCost = Math.max(...analytics.providerSummaries.map((p) => p.totalCostUsd), 0.01);
-  const providerDistBars = analytics.providerSummaries.map((p) => {
-    const width = Math.max(2, (p.totalCostUsd / maxProviderCost) * 100);
-    const pct = totalCost > 0 ? ((p.totalCostUsd / totalCost) * 100).toFixed(0) : '0';
-    const unpricedNote = p.unpricedSessions > 0 ? ` <span class="unpriced-text">(${p.unpricedSessions} unpriced)</span>` : '';
-    return `<div class="dist-section"><div class="chart-bar"><span>${escapeHtml(p.provider)}</span><span>$${p.totalCostUsd.toFixed(2)} (${pct}%)${unpricedNote}</span></div><div class="bar" style="width:${Math.round(width)}%"></div></div>`;
-  }).join('\n');
-
-  const maxModelTokens = Math.max(...analytics.modelSummaries.map((m) => m.totalTokens), 1);
-  const modelDistBars = analytics.modelSummaries.slice(0, 10).map((m) => {
-    const width = Math.max(2, (m.totalTokens / maxModelTokens) * 100);
-    const pct = totalTokens > 0 ? ((m.totalTokens / totalTokens) * 100).toFixed(0) : '0';
-    return `<div class="dist-section"><div class="chart-bar"><span>${escapeHtml(m.model)}</span><span>${formatNumber(m.totalTokens)} (${pct}%)</span></div><div class="bar" style="width:${Math.round(width)}%;background:#7c3aed"></div></div>`;
-  }).join('\n');
-
-  const modelRows = analytics.modelSummaries.map((m) => {
-    const width = Math.max(2, (m.totalTokens / maxModelTokens) * 100);
-    return `<tr>
-      <td>${escapeHtml(m.model)}</td>
-      <td>${escapeHtml(m.provider)}</td>
-      <td>${m.sessions}</td>
-      <td>${formatNumber(m.totalTokens)}</td>
-      <td>$${m.totalCostUsd.toFixed(2)}</td>
-      <td>${m.averageEfficiency !== null ? m.averageEfficiency.toFixed(0) : 'n/a'}</td>
-    </tr>`;
-  }).join('\n');
+  const cells = dailyBuckets.map((d) => {
+    const opacity = Math.max(0.15, d.totalTokens / maxDailyTokens);
+    const title = `${d.date}: ${d.sessions} sessions, ${formatNumber(d.totalTokens)} tokens`;
+    return `<div class="heatmap-cell" style="opacity:${opacity}" title="${escapeHtml(title)}"></div>`;
+  }).join('');
 
   return `<!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Token Tracker — Analytics</title>
-<style>${PAGE_STYLES}</style>
-</head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Token Tracker — Analytics</title><style>${PAGE_STYLES}</style></head>
 <body>
   <nav class="nav">
     <span class="nav-brand">Token Tracker</span>
@@ -437,23 +369,31 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
     <h2>Model Breakdown</h2>
     <table>
       <thead><tr><th>Model</th><th>Provider</th><th>Sessions</th><th>Tokens</th><th>Cost (USD)</th><th>Avg Efficiency</th></tr></thead>
-      <tbody>${modelRows || '<tr><td colspan="6" class="empty">no model data</td></tr>'}</tbody>
+      <tbody>${analytics.modelSummaries.map((m) => `<tr><td>${escapeHtml(m.model)}</td><td>${escapeHtml(m.provider)}</td><td>${m.sessions}</td><td>${formatNumber(m.totalTokens)}</td><td>$${m.totalCostUsd.toFixed(2)}</td><td>${m.averageEfficiency !== null ? m.averageEfficiency.toFixed(0) : 'n/a'}</td></tr>`).join('\n')}</tbody>
     </table>
   </div>
 
   <div class="analytics-group">
     <div class="section">
-      <h2>Daily Trends</h2>
-      <h3 style="font-size:13px;color:#6b7280;margin:0 0 8px;font-weight:500">Tokens</h3>
+      <h2>Daily Tokens Trend</h2>
       ${tokenChartBars || '<p class="empty">no daily token data</p>'}
-      <h3 style="font-size:13px;color:#6b7280;margin:16px 0 8px;font-weight:500">Cost</h3>
+    </div>
+    <div class="section">
+      <h2>Daily Cost Trend</h2>
       ${costChartBars || '<p class="empty">no daily cost data</p>'}
     </div>
   </div>
 
   <div class="analytics-group">
     <div class="section">
-      <h2>Daily Activity (Last 14 Days)</h2>
+      <h2>Activity Heatmap</h2>
+      <div class="heatmap-grid">${cells}</div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#9ca3af;margin-top:4px"><span>Less</span><div style="display:flex;gap:2px"><div class="heatmap-cell" style="opacity:0.15"></div><div class="heatmap-cell" style="opacity:0.4"></div><div class="heatmap-cell" style="opacity:0.7"></div><div class="heatmap-cell" style="opacity:1"></div></div><span>More</span></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Daily Activity (Last ${dailyBuckets.length} Days)</h2>
     <table>
       <thead><tr><th>Date</th><th>Sessions</th><th>Tokens</th><th>Cost (USD)</th><th>Avg Efficiency</th></tr></thead>
       <tbody>${dailyRows || '<tr><td colspan="5" class="empty">no daily data</td></tr>'}</tbody>
@@ -462,7 +402,7 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
   </div>
 
   <p class="footer-note">
-    <a href="/export/analytics-svg?days=${activeDays}" class="copy-btn" style="background:#16a34a;text-decoration:none">📥 Download SVG</a>
+    <a href="/export/analytics-svg" class="copy-btn" style="background:#16a34a;text-decoration:none">📥 Download SVG</a>
     <button class="copy-btn" onclick="copyAnalyticsSummary()">📋 Copy text</button>
   </p>
   <script>
@@ -472,193 +412,73 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
       var summary = 'Token Tracker Analytics\n' + stats.trim() + '\n\n' + text.trim();
       navigator.clipboard.writeText(summary).then(function() {
         var btn = document.querySelector('.copy-btn');
-        if (btn) { btn.textContent = '✓ Copied'; setTimeout(function() { btn.textContent = '📋 Copy summary'; }, 2000); }
+        if (btn) { btn.textContent = '✓ Copied'; setTimeout(function() { btn.textContent = '📋 Copy text'; }, 2000); }
       }).catch(function() {});
     }
   </script>
   </main>
-</body>
-</html>`;
-}
-
-function buildMenubarEmptyHtml(): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Token Tracker</title><style>${MENUBAR_STYLES}</style></head>
-<body>
-  <div class="header"><span class="health-dot health-dot-warn"></span><span class="header-title">Token Tracker</span></div>
-  <p class="empty">No data imported yet.<br>Run <code>ttm import</code> to populate.</p>
-  <a class="action-link" href="/">Open Dashboard</a>
 </body></html>`;
 }
 
-function buildMenubarErrorHtml(message: string): string {
+function buildNotFoundHtml(sessionId: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Token Tracker</title><style>${MENUBAR_STYLES}</style></head>
+<title>Token Tracker — Not Found</title><style>${PAGE_STYLES}</style></head>
 <body>
-  <div class="header"><span class="health-dot health-dot-critical"></span><span class="header-title">Token Tracker</span></div>
-  <p class="error">${escapeHtml(message)}</p>
-  <a class="action-link" href="/">Open Dashboard</a>
+  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a></nav>
+  <main><a class="back-link-spaced" href="/">&larr; Back to overview</a><h1>Session Not Found</h1><p class="empty">No session found with id <code>${escapeHtml(sessionId)}</code>.</p></main>
 </body></html>`;
 }
 
-function buildCacheEfficiencySection(analytics: ReadAnalyticsSnapshot): string {
-  const sessionsWithCache = analytics.modelSummaries.filter(m => m.averageEfficiency !== null);
-  if (sessionsWithCache.length === 0) {
-    return '<div class="analytics-group"><div class="section"><h2>Cache Efficiency</h2><p class="empty">Cache efficiency data is not available for this provider. OpenCode sessions include native cache metrics; Codex sessions do not expose cache hit rates.</p></div></div>';
-  }
-
-  const avgCacheRate = sessionsWithCache.reduce((sum, m) => sum + (m.averageEfficiency ?? 0), 0) / sessionsWithCache.length;
-  const barWidth = Math.min(100, avgCacheRate * 100);
-  const health = avgCacheRate > 0.7 ? 'healthy' : avgCacheRate > 0.4 ? 'warn' : 'critical';
-
-  return `<div class="analytics-group">
-    <div class="section">
-      <h2>Cache Efficiency</h2>
-      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
-        <span>Average cache hit rate</span>
-        <span>${(avgCacheRate * 100).toFixed(1)}%</span>
-      </div>
-      <div class="meter"><div class="meter-fill meter-fill-${health}" style="width:${barWidth}%"></div></div>
-      <p style="font-size:11px;color:#9ca3af;margin-top:8px">Based on ${sessionsWithCache.length} model(s) with cache data. Codex sessions do not expose cache hit rates.</p>
-    </div>
-  </div>`;
-}
-
-function menubarProviderHealth(summary: SessionSummary): 'healthy' | 'warn' | 'critical' {
-  if (summary.resetWindowRemainingPercent !== null) {
-    if (summary.resetWindowRemainingPercent < 0.20) return 'critical';
-    if (summary.resetWindowRemainingPercent < 0.50) return 'warn';
-  }
-  if (summary.unpricedSessions > 0) return 'warn';
-  return 'healthy';
-}
-
-function menubarOverallHealth(summaries: SessionSummary[]): 'healthy' | 'warn' | 'critical' {
-  if (summaries.length === 0) return 'warn';
-  const statuses = summaries.map(menubarProviderHealth);
-  if (statuses.includes('critical')) return 'critical';
-  if (statuses.includes('warn')) return 'warn';
-  return 'healthy';
-}
-
-function buildHeatmapSection(buckets: DailyBucket[]): string {
-  if (buckets.length === 0) {
-    return '<div class="analytics-group"><div class="section"><h2>Activity Heatmap</h2><p class="empty">No activity data available.</p></div></div>';
-  }
-
-  const maxSessions = Math.max(...buckets.map((b) => b.sessions), 1);
-  const cells = buckets.slice().reverse().map((b) => {
-    const intensity = b.sessions / maxSessions;
-    const opacity = Math.max(0.15, intensity);
-    const title = b.date + ': ' + b.sessions + ' sessions, ' + formatNumber(b.totalTokens) + ' tokens';
-    return '<div class="heatmap-cell" style="opacity:' + opacity + '" title="' + title + '"></div>';
-  }).join('');
-
-  return '<div class="analytics-group"><div class="section"><h2>Activity Heatmap</h2><div class="heatmap-grid">' + cells + '</div><div style="display:flex;justify-content:space-between;font-size:10px;color:#9ca3af;margin-top:4px"><span>Less</span><div style="display:flex;gap:2px"><div class="heatmap-cell" style="opacity:0.15"></div><div class="heatmap-cell" style="opacity:0.4"></div><div class="heatmap-cell" style="opacity:0.7"></div><div class="heatmap-cell" style="opacity:1"></div></div><span>More</span></div></div></div>';
-}
-
-function buildSessionMeter(sessionCount: number): string {
-  // Session meter: 0-100 sessions = 0-100%, cap at 100
-  // Weekly meter: assumes ~20 sessions/week as "full"
-  const sessionPct = Math.min(100, sessionCount);
-  const weeklyPct = Math.min(100, (sessionCount / 20) * 100);
-  const health = sessionCount < 50 ? 'healthy' : sessionCount < 100 ? 'warn' : 'critical';
-
-  return `<div style="margin-bottom:8px">
-    <div style="display:flex;justify-content:space-between;font-size:10px;color:#9ca3af;margin-bottom:2px">
-      <span>Session load* (heuristic)</span><span>${sessionCount}/100</span>
-    </div>
-    <div class="meter"><div class="meter-fill meter-fill-${health}" style="width:${sessionPct}%"></div></div>
-    <div style="display:flex;justify-content:space-between;font-size:10px;color:#9ca3af;margin:4px 0 2px">
-      <span>Weekly pace* (heuristic)</span><span>${weeklyPct.toFixed(0)}%</span>
-    </div>
-    <div class="meter"><div class="meter-fill meter-fill-${health}" style="width:${weeklyPct}%"></div></div>
-  </div>`;
-}
-
-function buildMinimalProviderRows(summaries: SessionSummary[]): string {
-  return summaries.map((p) => {
-    const health = menubarProviderHealth(p);
-    const costStr = p.totalCostUsd > 0 ? '$' + p.totalCostUsd.toFixed(2) : '$0';
-    return '<div class="provider-row"><span class="provider-dot provider-dot-' + health + '"></span><span class="provider-name">' + escapeHtml(p.provider) + '</span><span class="provider-cost">' + costStr + '</span></div>';
-  }).join('\n');
-}
-
-function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: StoredSessionListItem[], compactMode: 'detailed' | 'minimal' = 'detailed'): string {
-  const totalCost = snapshot.providerSummaries.reduce((sum, p) => sum + p.totalCostUsd, 0);
-  const overallHealth = menubarOverallHealth(snapshot.providerSummaries);
-
-  const providerRows = snapshot.providerSummaries.map((p) => {
-    const health = menubarProviderHealth(p);
-    const costStr = p.totalCostUsd > 0 ? `$${p.totalCostUsd.toFixed(2)}` : '$0.00';
-    const resetPct = p.resetWindowRemainingPercent;
-    const unpricedWarn = p.unpricedSessions > 0 ? `<span class="unpriced-text">${p.unpricedSessions} unpriced</span>` : '';
-    const resetBar = resetPct !== null
-      ? `<div class="reset-bar-wrap"><div class="reset-bar reset-bar-${health}" style="width:${(resetPct * 100).toFixed(0)}%"></div></div>`
-      : '';
-    const resetKind = p.resetWindowKind ? `<span class="menubar-label">${escapeHtml(p.resetWindowKind)}</span>` : '';
-    const countdownStr = p.resetWindowResetsAt ? buildCountdownStr(p.resetWindowResetsAt) : '';
-    const resetLabel = resetPct !== null ? `<span class="menubar-label">${(resetPct * 100).toFixed(0)}%${countdownStr ? ` · ${countdownStr}` : ''}</span>` : '';
-
-    const incidentBadge = p.unpricedSessions > 0 ? `<span class="incident-badge" title="${p.unpricedSessions} session(s) with unknown pricing">⚠</span>` : '';
-    return `<div class="provider-row"><span class="provider-dot provider-dot-${health}"></span><span class="provider-name">${escapeHtml(p.provider)}</span>${incidentBadge}${resetKind}<span class="provider-sessions">${p.sessions}</span><span class="provider-cost">${costStr}</span>${resetLabel}${unpricedWarn}</div>${resetBar}`;
-  }).join('\n');
-
-  const recentItems = recentSessions.slice(0, 3).map((s) => {
-    const costStr = s.pricingSnapshotId === null ? '?' : `$${s.costTotalUsd.toFixed(2)}`;
-    const timeStr = menubarRelativeTime(s.startedAt);
-    return `<div class="recent-item"><span class="recent-title">${escapeHtml(s.title ?? '<untitled>')}</span><span class="recent-cost">${costStr}</span><span class="recent-time">${timeStr}</span></div>`;
-  }).join('\n');
-
-  const recentSection = recentItems
-    ? `<div class="section-label">Recent</div>${recentItems}`
-    : '';
-
+function buildDetailHtml(session: StoredSessionDetail): string {
   return `<!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Token Tracker</title>
-<style>${MENUBAR_STYLES}</style>
-</head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Token Tracker — ${escapeHtml(session.title ?? session.providerSessionId)}</title><style>${PAGE_STYLES}</style></head>
 <body>
-  <div class="header">
-    <span class="health-dot health-dot-${overallHealth}" title="${overallHealth === 'healthy' ? 'All systems healthy' : overallHealth === 'warn' ? 'Attention needed' : 'Critical issue'}" role="status" aria-label="Health status: ${overallHealth === 'healthy' ? 'healthy' : overallHealth === 'warn' ? 'warning' : 'critical'}"></span>
-    <span class="header-title">Token Tracker</span>
-    <span class="mode-toggle" id="mode-toggle" title="Toggle compact mode">▤</span>
+  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a></nav>
+  <main>
+  <a class="back-link-spaced" href="/">&larr; Back to overview</a>
+  <h1>${escapeHtml(session.title ?? '<untitled>')}</h1>
+  <p class="subtitle">${escapeHtml(session.provider)} / ${escapeHtml(session.model ?? 'unknown')} / ${escapeHtml(session.providerSessionId)}</p>
+
+  <div class="detail-grid">
+    <div class="detail-label">Started</div><div class="detail-value">${escapeHtml(session.startedAt)}</div>
+    <div class="detail-label">Duration</div><div class="detail-value">${session.durationMs !== null ? `${(session.durationMs / 1000).toFixed(0)}s` : 'n/a'}</div>
+    <div class="detail-label">Project</div><div class="detail-value">${session.projectPath ? escapeHtml(session.projectPath) : '<span class="empty">unknown</span>'}</div>
+    <div class="detail-label">Tokens</div><div class="detail-tokens"><span class="detail-token-item"><span class="detail-token-label">input:</span> ${formatNumber(session.tokenInput)}</span><span class="detail-token-item"><span class="detail-token-label">output:</span> ${formatNumber(session.tokenOutput)}</span><span class="detail-token-item"><span class="detail-token-label">cached:</span> ${formatNumber(session.tokenCachedInput)}</span><span class="detail-token-item"><span class="detail-token-label">reasoning:</span> ${formatNumber(session.tokenReasoning)}</span><span class="detail-token-item"><span class="detail-token-label">total:</span> ${formatNumber(session.tokenTotal)}</span></div>
+    <div class="detail-label">Cost</div><div class="detail-value">${session.pricingSnapshotId === null ? '<span class="badge badge-unknown">unknown pricing</span>' : `$${session.costTotalUsd.toFixed(4)}`}</div>
+    <div class="detail-label">Cache Hit Rate</div><div class="detail-value">${session.cacheHitRate !== null ? `${(session.cacheHitRate * 100).toFixed(1)}%` : 'n/a'}</div>
+    <div class="detail-label">Efficiency</div><div class="detail-value">${session.efficiencyScore !== null ? session.efficiencyScore.toFixed(0) : 'n/a'}</div>
+    <div class="detail-label">Waste</div><div class="detail-value">${session.wasteScore !== null ? session.wasteScore.toFixed(0) : 'n/a'}</div>
+    <div class="detail-label">Outcome</div><div class="detail-value">${escapeHtml(session.outcome)} (confidence: ${session.outcomeConfidence !== null ? session.outcomeConfidence.toFixed(2) : 'n/a'})</div>
+    <div class="detail-label">Task Category</div><div class="detail-value">${escapeHtml(session.taskCategory)} (confidence: ${session.taskCategoryConfidence !== null ? session.taskCategoryConfidence.toFixed(2) : 'n/a'})</div>
+    <div class="detail-label">Loop Count</div><div class="detail-value">${session.loopCount}</div>
+    <div class="detail-label">Anomaly Score</div><div class="detail-value">${session.anomalyScore !== null ? session.anomalyScore.toFixed(2) : 'n/a'}</div>
   </div>
 
-  <div class="aggregate">
-    <span>$${totalCost.toFixed(2)} total</span>
-    <span class="aggregate-value">${snapshot.sessionCount} sessions</span>
+  <div class="section">
+    <h3>Outcome Reasons</h3>
+    ${session.outcomeReasons.length > 0 ? `<ul>${session.outcomeReasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>` : '<p class="empty">No outcome reasons recorded.</p>'}
   </div>
-  ${compactMode === 'detailed' ? buildSessionMeter(snapshot.sessionCount) : ''}
 
-  <div class="section-label">Providers</div>
-  ${compactMode === 'detailed' ? providerRows : buildMinimalProviderRows(snapshot.providerSummaries)}
+  <div class="section">
+    <h3>Waste Reasons</h3>
+    ${session.wasteReasons.length > 0 ? `<ul>${session.wasteReasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>` : '<p class="empty">No waste reasons recorded.</p>'}
+  </div>
 
-  ${compactMode === 'detailed' ? recentSection : ''}
-
-  <a class="action-link" href="/">Open Dashboard</a>
-  <script>
-    (function() {
-      var toggle = document.getElementById('mode-toggle');
-      if (toggle) {
-        toggle.addEventListener('click', function() {
-          var current = new URLSearchParams(window.location.search).get('mode') || 'detailed';
-          var next = current === 'detailed' ? 'minimal' : 'detailed';
-          window.location.search = 'mode=' + next;
-        });
-      }
-    })();
-  </script>
-</body>
-</html>`;
+  <div class="section">
+    <h3>Score Factors</h3>
+    ${session.scoreFactors.length > 0
+      ? `<ul class="factor-list">${session.scoreFactors.map((f) => {
+          const cls = f.direction === 'positive' ? 'factor-positive' : f.direction === 'negative' ? 'factor-negative' : 'factor-neutral';
+          return `<li class="factor-item ${cls}">${escapeHtml(f.label)} (impact: ${f.impact})</li>`;
+        }).join('')}</ul>`
+      : '<p class="empty">No explanation factors recorded for this session.</p>'}
+  </div>
+  </main>
+</body></html>`;
 }
 
 function parseUrlPath(rawUrl: string): { path: string; sessionId: string | null; provider: string | null; model: string | null; q: string | null; page: number; mode: string | null } {
@@ -736,38 +556,38 @@ function handleRequest(
     return;
   }
 
-  if (path === '/api/preferences') {
-    const currentPrefs = loadPreferences();
-    response.writeHead(200, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify(currentPrefs));
-    return;
-  }
+  if (path === '/export/analytics-svg') {
+    let analytics: ReadAnalyticsSnapshot | null = null;
+    let error: string | null = null;
+    let exportDays = 30;
 
-  if (path === '/api/preferences' && request.method === 'POST') {
-    let body = '';
-    request.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-    request.on('end', () => {
-      try {
-        const parsed = JSON.parse(body) as Record<string, unknown>;
-        const current = loadPreferences();
-        const updated: MonitoringPreferences = {
-          refreshCadenceSeconds: typeof parsed.refreshCadenceSeconds === 'number'
-            ? Math.max(1, Math.min(60, Math.trunc(parsed.refreshCadenceSeconds)))
-            : current.refreshCadenceSeconds,
-          defaultAnalyticsWindowDays: typeof parsed.defaultAnalyticsWindowDays === 'number'
-            ? [7, 14, 30, 90].includes(parsed.defaultAnalyticsWindowDays)
-              ? parsed.defaultAnalyticsWindowDays
-              : current.defaultAnalyticsWindowDays
-            : current.defaultAnalyticsWindowDays,
-        };
-        savePreferences(updated);
-        response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify(updated));
-      } catch {
-        response.writeHead(400, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ error: 'invalid preferences' }));
+    const exportUrlParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
+    const exportDaysParam = exportUrlParams.get('days');
+    if (exportDaysParam) {
+      const parsed = Number(exportDaysParam);
+      if ([7, 14, 30, 90].includes(parsed)) {
+        exportDays = parsed;
       }
+    }
+
+    try {
+      analytics = readService.getAnalyticsSnapshot(exportDays);
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
+    }
+
+    if (error || !analytics || analytics.sessionCount === 0) {
+      response.writeHead(400, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ error: 'No analytics data available to export' }));
+      return;
+    }
+
+    const svg = buildAnalyticsSummarySvg(analytics);
+    response.writeHead(200, {
+      'Content-Type': 'image/svg+xml',
+      'Content-Disposition': `attachment; filename="token-tracker-analytics-${exportDays}d.svg"`,
     });
+    response.end(svg);
     return;
   }
 
@@ -775,14 +595,7 @@ function handleRequest(
     let snapshot: ReadSummarySnapshot | null = null;
     let sessions: StoredSessionListItem[] = [];
     let error: string | null = null;
-    let compactMode: 'detailed' | 'minimal' = 'detailed';
-
-    // Parse mode query param
-    if (mode) {
-      if (mode === 'minimal' || mode === 'detailed') {
-        compactMode = mode as 'detailed' | 'minimal';
-      }
-    }
+    const compactMode = mode === 'minimal' ? 'minimal' : 'detailed';
 
     try {
       snapshot = readService.getSummarySnapshot();
@@ -816,7 +629,6 @@ function handleRequest(
     const defaultPrefs = loadPreferences();
     let activeDays = defaultPrefs.defaultAnalyticsWindowDays;
 
-    // Parse days query param from URL
     const urlParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
     const daysParam = urlParams.get('days');
     if (daysParam) {
@@ -849,42 +661,6 @@ function handleRequest(
     return;
   }
 
-  if (path === '/export/analytics-svg') {
-    let analytics: ReadAnalyticsSnapshot | null = null;
-    let error: string | null = null;
-    let exportDays = 30;
-
-    // Parse days query param from URL (same logic as /analytics)
-    const exportUrlParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
-    const exportDaysParam = exportUrlParams.get('days');
-    if (exportDaysParam) {
-      const parsed = Number(exportDaysParam);
-      if ([7, 14, 30, 90].includes(parsed)) {
-        exportDays = parsed;
-      }
-    }
-
-    try {
-      analytics = readService.getAnalyticsSnapshot(exportDays);
-    } catch (caught) {
-      error = caught instanceof Error ? caught.message : String(caught);
-    }
-
-    if (error || !analytics || analytics.sessionCount === 0) {
-      response.writeHead(400, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ error: 'No analytics data available to export' }));
-      return;
-    }
-
-    const svg = buildAnalyticsSummarySvg(analytics);
-    response.writeHead(200, {
-      'Content-Type': 'image/svg+xml',
-      'Content-Disposition': `attachment; filename="token-tracker-analytics-${exportDays}d.svg"`,
-    });
-    response.end(svg);
-    return;
-  }
-
   if (path === '/' || path === '/index.html') {
     if (sessionId) {
       try {
@@ -904,13 +680,15 @@ function handleRequest(
     }
 
     let snapshot: ReadSummarySnapshot | null = null;
-    let error: string | null = null;
+    let sessions: StoredSessionListItem[] = [];
     let listResult: { sessions: StoredSessionListItem[]; total: number; page: number; pageSize: number; totalPages: number } | null = null;
+    let error: string | null = null;
 
     try {
       snapshot = readService.getSummarySnapshot();
       if (snapshot.sessionCount > 0) {
         listResult = readService.listSessionsWithCount({ provider: provider ?? undefined, model: model ?? undefined, search: q ?? undefined, page });
+        sessions = listResult.sessions;
       }
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
@@ -928,15 +706,10 @@ function handleRequest(
       return;
     }
 
-    if (!listResult) {
-      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      response.end(buildEmptyHtml());
-      return;
-    }
+    const modelOptions = readService.getModelOptions();
 
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    const modelOptions = readService.getModelOptions();
-    response.end(buildOverviewHtml(snapshot, listResult.sessions, provider, model, q, listResult, modelOptions));
+    response.end(buildOverviewHtml(snapshot, sessions, provider, model, q, listResult, modelOptions));
     return;
   }
 
@@ -957,7 +730,6 @@ let refreshState: RefreshState = {
 };
 
 function setupFileWatcher(dbPath: string, prefs: MonitoringPreferences): void {
-  // Use watchFile with polling for reliable macOS support
   const pollInterval = prefs.refreshCadenceSeconds * 1000;
 
   try {
@@ -974,7 +746,6 @@ function setupFileWatcher(dbPath: string, prefs: MonitoringPreferences): void {
     // Database file may not exist yet, non-critical
   }
 
-  // Also watch WAL file if it exists
   const walPath = `${dbPath}-wal`;
   try {
     if (existsSync(walPath)) {
@@ -995,6 +766,55 @@ function setupFileWatcher(dbPath: string, prefs: MonitoringPreferences): void {
 
 function getRefreshState(): RefreshState {
   return refreshState;
+}
+
+function buildMenubarEmptyHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Token Tracker</title><style>${MENUBAR_STYLES}</style></head>
+<body>
+  <div class="header"><span class="health-dot health-dot-warn"></span><span class="header-title">Token Tracker</span></div>
+  <p class="empty">No data imported yet.<br>Run <code>ttm import</code> to populate.</p>
+  <a class="action-link" href="/">Open Dashboard</a>
+</body></html>`;
+}
+
+function buildMenubarErrorHtml(message: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Token Tracker</title><style>${MENUBAR_STYLES}</style></head>
+<body>
+  <div class="header"><span class="health-dot health-dot-critical"></span><span class="header-title">Token Tracker</span></div>
+  <p class="error">${escapeHtml(message)}</p>
+  <a class="action-link" href="/">Open Dashboard</a>
+</body></html>`;
+}
+
+function buildSessionMeter(sessionCount: number): string {
+  const sessionPct = Math.min(100, sessionCount);
+  const weeklyPct = Math.min(100, (sessionCount / 20) * 100);
+  const health = sessionCount < 50 ? 'healthy' : sessionCount < 100 ? 'warn' : 'critical';
+
+  return `<div style="margin-bottom:8px">
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:#9ca3af;margin-bottom:2px">
+      <span>Session load* (heuristic)</span><span>${sessionCount}/100</span>
+    </div>
+    <div class="meter"><div class="meter-fill meter-fill-${health}" style="width:${sessionPct}%"></div></div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:#9ca3af;margin:4px 0 2px">
+      <span>Weekly pace* (heuristic)</span><span>${weeklyPct.toFixed(0)}%</span>
+    </div>
+    <div class="meter"><div class="meter-fill meter-fill-${health}" style="width:${weeklyPct}%"></div></div>
+  </div>`;
+}
+
+function buildMinimalProviderRows(summaries: SessionSummary[]): string {
+  return summaries.map((p) => {
+    const health = menubarProviderHealth(p);
+    const costStr = p.totalCostUsd > 0 ? '$' + p.totalCostUsd.toFixed(2) : '$0';
+    return '<div class="provider-row"><span class="provider-dot provider-dot-' + health + '"></span><span class="provider-name">' + escapeHtml(p.provider) + '</span><span class="provider-cost">' + costStr + '</span></div>';
+  }).join('\n');
 }
 
 function main(): void {
@@ -1029,4 +849,7 @@ function main(): void {
   });
 }
 
-void main();
+const isMain = process.argv[1]?.endsWith('index.js') ?? false;
+if (isMain) {
+  main();
+}
