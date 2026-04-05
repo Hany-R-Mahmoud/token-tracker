@@ -337,6 +337,8 @@ export class TtmDatabase implements AdapterStorage {
         verification_state AS verificationState,
         success_score AS successScore,
         analysis_confidence AS analysisConfidence
+      FROM sessions
+      ${whereClause}
       ORDER BY started_at DESC
       LIMIT ? OFFSET ?
     `).all(...values, pageSize, offset) as unknown as StoredSessionListItem[];
@@ -398,6 +400,7 @@ export class TtmDatabase implements AdapterStorage {
         verification_state AS verificationState,
         success_score AS successScore,
         analysis_confidence AS analysisConfidence
+      FROM sessions
       ${whereClause}
       ORDER BY started_at DESC
       LIMIT ? OFFSET ?

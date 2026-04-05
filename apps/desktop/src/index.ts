@@ -60,8 +60,9 @@ function buildErrorHtml(message: string): string {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — Error</title><style>${PAGE_STYLES}</style></head>
 <body>
-  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a></nav>
+  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a><button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button></nav>
   <main><h1>Error</h1><p class="error">An unexpected error occurred. Please try again.</p></main>
+  ${buildThemeScript()}
 </body></html>`;
 }
 
@@ -71,9 +72,30 @@ function buildEmptyHtml(): string {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker</title><style>${PAGE_STYLES}</style></head>
 <body>
-  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a></nav>
+  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a><button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button></nav>
   <main><h1>Token Tracker</h1><p class="empty">No data imported yet. Run <code>ttm import</code> to populate the local store.</p></main>
+  ${buildThemeScript()}
 </body></html>`;
+}
+
+function buildThemeScript(): string {
+  return `<script>
+    (function() {
+      try {
+        var savedTheme = localStorage.getItem('ttm-theme');
+        if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+        var toggle = document.getElementById('theme-toggle');
+        if (toggle) {
+          toggle.addEventListener('click', function() {
+            var current = document.documentElement.getAttribute('data-theme');
+            var next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('ttm-theme', next);
+          });
+        }
+      } catch (_) {}
+    })();
+  </script>`;
 }
 
 function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessionListItem[], activeProvider: string | null, activeModel: string | null, activeQ: string | null, listResult: { sessions: StoredSessionListItem[]; total: number; page: number; pageSize: number; totalPages: number } | null, modelOptions: { model: string; sessionCount: number }[], contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null): string {
@@ -227,20 +249,8 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
       setInterval(updateRefreshState, 5000);
     })();
 
-    (function() {
-      var savedTheme = localStorage.getItem('ttm-theme');
-      if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
-      var toggle = document.getElementById('theme-toggle');
-      if (toggle) {
-        toggle.addEventListener('click', function() {
-          var current = document.documentElement.getAttribute('data-theme');
-          var next = current === 'dark' ? 'light' : 'dark';
-          document.documentElement.setAttribute('data-theme', next);
-          localStorage.setItem('ttm-theme', next);
-        });
-      }
-    })();
   </script>
+  ${buildThemeScript()}
   </main>
 </body>
 </html>`;
@@ -626,7 +636,7 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
     return `<div class="chart-row"><div class="chart-bar"><span>${escapeHtml(m.model)}</span><span>${formatNumber(m.totalTokens)}</span></div><div class="bar" style="width:${Math.round(width)}%;background:#7c3aed"></div></div>`;
   }).join('\n');
 
-  const dailyBuckets = analytics.dailyBuckets.slice(-14);
+  const dailyBuckets = [...analytics.dailyBuckets].reverse();
   const maxDailyTokens = Math.max(...dailyBuckets.map((d: DailyBucket) => d.totalTokens), 1);
   const maxDailyCost = Math.max(...dailyBuckets.map((d: DailyBucket) => d.totalCostUsd), 0.01);
 
@@ -667,6 +677,7 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
     <a href="/">Overview</a>
     <a href="/analytics" class="active">Analytics</a>
     <a href="/menubar">Menubar</a>
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button>
   </nav>
   <main id="main-content">
   <h1>Analytics</h1>
@@ -677,15 +688,6 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
       <div class="stat-value">${analytics.sessionCount}</div>
       <div class="stat-label">Total Sessions</div>
     </div>
-    <div class="stat-card" role="status" aria-label="Total tokens: ${formatNumber(totalTokens)}">
-      <div class="stat-value">${formatNumber(totalTokens)}</div>
-      <div class="stat-label">Total Tokens</div>
-    </div>
-    <div class="stat-card" role="status" aria-label="Total cost: $${totalCost.toFixed(2)}">
-      <div class="stat-value">$${totalCost.toFixed(2)}</div>
-      <div class="stat-label">Total Cost</div>
-    </div>
-  </div>
     <div class="stat-card" role="status" aria-label="Total tokens: ${formatNumber(totalTokens)}">
       <div class="stat-value">${formatNumber(totalTokens)}</div>
       <div class="stat-label">Total Tokens</div>
@@ -781,6 +783,7 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
       }).catch(function() {});
     }
   </script>
+  ${buildThemeScript()}
   </main>
 </body></html>`;
 }
@@ -791,8 +794,9 @@ function buildNotFoundHtml(sessionId: string): string {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — Not Found</title><style>${PAGE_STYLES}</style></head>
 <body>
-  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a></nav>
+  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a><button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button></nav>
   <main><a class="back-link-spaced" href="/">&larr; Back to overview</a><h1>Session Not Found</h1><p class="empty">No session found with id <code>${escapeHtml(sessionId)}</code>.</p></main>
+  ${buildThemeScript()}
 </body></html>`;
 }
 
@@ -802,7 +806,7 @@ function buildDetailHtml(session: StoredSessionDetail): string {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — ${escapeHtml(session.title ?? session.providerSessionId)}</title><style>${PAGE_STYLES}</style></head>
 <body>
-  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a></nav>
+  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a><button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button></nav>
   <main>
   <a class="back-link-spaced" href="/">&larr; Back to overview</a>
   <h1>${escapeHtml(session.title ?? '<untitled>')}</h1>
@@ -849,6 +853,7 @@ function buildDetailHtml(session: StoredSessionDetail): string {
   })()}
 
   ${buildDetailSuccessSection(session)}  </main>
+  ${buildThemeScript()}
 </body></html>`;
 }
 
@@ -1033,14 +1038,18 @@ function handleRequest(
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     let contextPressure: { low: number; medium: number; high: number; critical: number; unknown: number } | null = null;
     if (sessions.length > 0) {
-      const analytics = readService.getAnalyticsSnapshot(30);
-      const recentWithAudit = analytics.recentSessions ?? [];
-      contextPressure = { low: 0, medium: 0, high: 0, critical: 0, unknown: 0 };
-      for (const s of recentWithAudit) {
-        const state = s.contextAudit?.contextPressureState ?? 'unknown';
-        if (state in contextPressure) {
-          contextPressure[state as keyof typeof contextPressure]++;
+      try {
+        const analytics = readService.getAnalyticsSnapshot(30);
+        const recentWithAudit = analytics.recentSessions ?? [];
+        contextPressure = { low: 0, medium: 0, high: 0, critical: 0, unknown: 0 };
+        for (const s of recentWithAudit) {
+          const state = s.contextAudit?.contextPressureState ?? 'unknown';
+          if (state in contextPressure) {
+            contextPressure[state as keyof typeof contextPressure]++;
+          }
         }
+      } catch (caught) {
+        process.stderr.write(`[WARN] failed to compute menubar context pressure: ${caught instanceof Error ? caught.message : String(caught)}\n`);
       }
     }
     response.end(buildMenubarHtml(snapshot, sessions, compactMode, null, contextPressure));
@@ -1131,22 +1140,27 @@ function handleRequest(
     }
 
     const modelOptions = readService.getModelOptions();
-    const analytics = readService.getAnalyticsSnapshot(30);
-    const recentWithAudit = analytics.recentSessions ?? [];
-    let nearLimitCount = 0;
-    let toolHeavyCount = 0;
-    const sessionContextMap: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] = [];
-    for (const s of recentWithAudit) {
-      const ca = s.contextAudit;
-      if (ca) {
-        if (ca.contextPressureState === 'high' || ca.contextPressureState === 'critical') nearLimitCount++;
-        if (ca.toolCallCount > 50) toolHeavyCount++;
-        sessionContextMap.push({ id: s.id, title: s.title, providerSessionId: s.providerSessionId, contextPercent: ca.contextUsagePercent });
+    let contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null = null;
+    try {
+      const analytics = readService.getAnalyticsSnapshot(30);
+      const recentWithAudit = analytics.recentSessions ?? [];
+      let nearLimitCount = 0;
+      let toolHeavyCount = 0;
+      const sessionContextMap: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] = [];
+      for (const s of recentWithAudit) {
+        const ca = s.contextAudit;
+        if (ca) {
+          if (ca.contextPressureState === 'high' || ca.contextPressureState === 'critical') nearLimitCount++;
+          if (ca.toolCallCount > 50) toolHeavyCount++;
+          sessionContextMap.push({ id: s.id, title: s.title, providerSessionId: s.providerSessionId, contextPercent: ca.contextUsagePercent });
+        }
       }
+      contextHealth = sessionContextMap.length > 0
+        ? { nearLimitCount, toolHeavyCount, topSessions: sessionContextMap.sort((a, b) => (b.contextPercent ?? 0) - (a.contextPercent ?? 0)) }
+        : null;
+    } catch (caught) {
+      process.stderr.write(`[WARN] failed to compute overview context health: ${caught instanceof Error ? caught.message : String(caught)}\n`);
     }
-    const contextHealth = sessionContextMap.length > 0
-      ? { nearLimitCount, toolHeavyCount, topSessions: sessionContextMap.sort((a, b) => (b.contextPercent ?? 0) - (a.contextPercent ?? 0)) }
-      : null;
 
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     response.end(buildOverviewHtml(snapshot, sessions, provider, model, q, listResult, modelOptions, contextHealth));

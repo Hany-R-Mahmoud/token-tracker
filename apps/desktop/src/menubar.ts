@@ -5,6 +5,17 @@ import { escapeHtml, formatNumber, buildCountdownStr, menubarRelativeTime, menub
 
 const WEB_APP_URL = process.env.TTM_WEB_URL ?? 'http://localhost:3200';
 
+function buildMenubarThemeScript(): string {
+  return `<script>
+    (function() {
+      try {
+        var savedTheme = localStorage.getItem('ttm-theme');
+        if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+      } catch (_) {}
+    })();
+  </script>`;
+}
+
 export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: StoredSessionListItem[], compactMode: 'detailed' | 'minimal' = 'detailed', myRank: { rank: number; totalMembers: number } | null = null, contextPressure: { low: number; medium: number; high: number; critical: number; unknown: number } | null = null): string {
   const totalCost = snapshot.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalCostUsd, 0);
   const totalSessions = snapshot.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.sessions, 0);
@@ -128,6 +139,7 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
     <a class="mb-action-btn mb-action-btn-primary" href="/">Dashboard</a>
     <a class="mb-action-btn" href="/analytics">Analytics</a>
   </div>
+  ${buildMenubarThemeScript()}
 </body></html>`;
   }
 
@@ -199,6 +211,7 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
     <a class="mb-action-btn" href="${WEB_APP_URL}/settings" target="_blank" rel="noopener external-link">Settings ↗</a>
   </div>
 
+  ${buildMenubarThemeScript()}
   ${compactMode === 'detailed' ? `<script>
     (function() {
       var toggle = document.getElementById('mode-toggle');
