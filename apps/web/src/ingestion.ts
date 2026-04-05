@@ -20,6 +20,11 @@ export interface SyncResult {
  * Only aggregated fields are ingested. No raw prompts, transcripts,
  * message content, file paths, or explanation text are copied.
  *
+ * Success analysis fields (completionState, verificationState, successScore,
+ * executionQualityScore, reworkScore, valueDensityScore, analysisConfidence)
+ * are included for aggregated leaderboard computation. Raw evidence signals
+ * are never shared.
+ *
  * @param leaderboardDb - The leaderboard database to write to
  * @param githubId - The GitHub user ID to attribute sessions to
  * @param teamId - The team ID to scope sessions to
@@ -57,6 +62,8 @@ export function syncLocalSessions(
       continue;
     }
 
+    const sa = detail.successAnalysis;
+
     leaderboardDb.upsertSession({
       sessionId: session.id,
       githubId,
@@ -72,6 +79,13 @@ export function syncLocalSessions(
       cacheHitRate: detail.cacheHitRate,
       outcome: session.outcome,
       outcomeConfidence: detail.outcomeConfidence,
+      completionState: sa?.completionState ?? null,
+      verificationState: sa?.verificationState ?? null,
+      successScore: sa?.successScore ?? null,
+      executionQualityScore: sa?.executionQualityScore ?? null,
+      reworkScore: sa?.reworkScore ?? null,
+      valueDensityScore: sa?.valueDensityScore ?? null,
+      analysisConfidence: sa?.analysisConfidence ?? null,
     });
 
     syncedSessions++;

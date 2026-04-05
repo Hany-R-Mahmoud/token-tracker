@@ -232,12 +232,18 @@ function runExport(args: string[]): void {
     return;
   }
 
+  const validated = validateExportPath(parsed.outputPath);
+  if (!validated.valid) {
+    process.stdout.write(`error: ${validated.error}\n`);
+    return;
+  }
+
   const database = new TtmDatabase();
   const readService = new TtmReadService(database);
   const bundle = readService.buildExportBundle(parsed.days);
 
-  writeFileSync(parsed.outputPath, JSON.stringify(bundle, null, 2), 'utf8');
-  process.stdout.write(`${formatKeyValueLine('export path', parsed.outputPath)}\n`);
+  writeFileSync(validated.path, JSON.stringify(bundle, null, 2), 'utf8');
+  process.stdout.write(`${formatKeyValueLine('export path', validated.path)}\n`);
   process.stdout.write(`${formatKeyValueLine('window days', parsed.days)}\n`);
   process.stdout.write(`${formatKeyValueLine('sessions exported', bundle.sessionCount)}\n`);
   process.stdout.write(`${formatKeyValueLine('providers', bundle.providerSummaries.length)}\n`);
@@ -644,6 +650,39 @@ function parseSessionFilters(args: string[]):
   }
 
   return { ok: true, provider, limit };
+}
+
+interface ExportValidationResult {
+  valid: boolean;
+  path: string;
+  error?: string;
+}
+
+function validateExportPath(path: string): ExportValidationResult {
+  if (!path || typeof path !== 'string') {
+    return { valid: false, path: '', error: 'Output path must be a non-empty string' };
+  }
+
+  const normalizedPath = path.trim();
+  
+  if (normalizedPath.length === 0 || normalizedPath.length > 4096) {
+    return { valid: false, path: '', error: 'Path length must be between 1 and 4096 characters' };
+  }
+
+  if (normalizedPath.includes('..')) {
+    return { valid: false, path: '', error: 'Path traversal not allowed' };
+  }
+
+  const isAbsolute = normalizedPath.startsWith('/') || /^[a-zA-Z]:/.test(normalizedPath);
+  const isRelative = !isAbsolute && /^[a-zA-Z0-9_\-\.\\/]+$/.test(normalizedPath);
+  
+  if (!isAbsolute && !isRelative) {
+    return { valid: false, path: '', error: 'Invalid path format' };
+  }
+
+  const resolved = isAbsolute ? normalizedPath : join(process.cwd(), normalizedPath);
+  
+  return { valid: true, path: resolved };
 }
 
 void main();

@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, chmodSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -44,6 +44,12 @@ const LEADERBOARD_SCHEMA_STATEMENTS = [
     cache_hit_rate REAL,
     outcome TEXT,
     outcome_confidence REAL,
+    completion_state TEXT,
+    verification_state TEXT,
+    success_score REAL,
+    execution_quality_score REAL,
+    rework_score REAL,
+    value_density_score REAL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (user_github_id) REFERENCES github_users(github_id),
     FOREIGN KEY (team_id) REFERENCES teams(team_id)
@@ -74,6 +80,15 @@ export class LeaderboardDatabase {
     this.database = new DatabaseSync(databasePath);
     this.database.exec('PRAGMA foreign_keys = ON');
     this.database.exec(LEADERBOARD_SCHEMA_STATEMENTS.join(';\n'));
+    
+    // File permission hardening - restrict database file to owner only
+    // This mitigates plaintext token exposure if the file is accessible to other users
+    try {
+      chmodSync(databasePath, 0o600);
+    } catch {
+      // Permission change may fail on some filesystems or Windows
+      // This is best-effort; the main mitigation is that tokens shouldn't be stored plaintext
+    }
   }
 
   public get path(): string {
@@ -466,13 +481,22 @@ export class LeaderboardDatabase {
     cacheHitRate: number | null;
     outcome: string | null;
     outcomeConfidence: number | null;
+    completionState: string | null;
+    verificationState: string | null;
+    successScore: number | null;
+    executionQualityScore: number | null;
+    reworkScore: number | null;
+    valueDensityScore: number | null;
+    analysisConfidence: number | null;
   }): void {
     this.database.prepare(`
       INSERT INTO leaderboard_sessions (
         session_id, user_github_id, team_id, provider, started_at, ended_at, model,
         token_total, cost_total_usd, efficiency_score, waste_score, cache_hit_rate,
-        outcome, outcome_confidence
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        outcome, outcome_confidence,
+        completion_state, verification_state, success_score, execution_quality_score,
+        rework_score, value_density_score, analysis_confidence
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_id) DO UPDATE SET
         token_total = excluded.token_total,
         cost_total_usd = excluded.cost_total_usd,
@@ -480,16 +504,67 @@ export class LeaderboardDatabase {
         waste_score = excluded.waste_score,
         cache_hit_rate = excluded.cache_hit_rate,
         outcome = excluded.outcome,
-        outcome_confidence = excluded.outcome_confidence
+        outcome_confidence = excluded.outcome_confidence,
+        completion_state = excluded.completion_state,
+        verification_state = excluded.verification_state,
+        success_score = excluded.success_score,
+        execution_quality_score = excluded.execution_quality_score,
+        rework_score = excluded.rework_score,
+        value_density_score = excluded.value_density_score,
+        analysis_confidence = excluded.analysis_confidence
     `).run(
       session.sessionId, session.githubId, session.teamId, session.provider,
       session.startedAt, session.endedAt, session.model,
       session.tokenTotal, session.costTotalUsd, session.efficiencyScore,
       session.wasteScore, session.cacheHitRate, session.outcome, session.outcomeConfidence,
+      session.completionState, session.verificationState, session.successScore,
+      session.executionQualityScore, session.reworkScore, session.valueDensityScore,
+      session.analysisConfidence,
     );
   }
 }
 
 export function defaultLeaderboardDatabasePath(): string {
-  return process.env.TTM_LEADERBOARD_DB_PATH ?? join(process.cwd(), '.ttm', 'leaderboard.sqlite');
+  const envPath = process.env.TTM_LEADERBOARD_DB_PATH;
+  if (envPath) {
+    const validated = validateLeaderboardPath(envPath);
+    if (!validated.valid) {
+      throw new Error(`Invalid TTM_LEADERBOARD_DB_PATH: ${validated.error}`);
+    }
+    return validated.path;
+  }
+  return join(process.cwd(), '.ttm', 'leaderboard.sqlite');
+}
+
+interface ValidationResult {
+  valid: boolean;
+  path: string;
+  error?: string;
+}
+
+function validateLeaderboardPath(path: string): ValidationResult {
+  if (!path || typeof path !== 'string') {
+    return { valid: false, path: '', error: 'Path must be a non-empty string' };
+  }
+
+  const normalizedPath = path.trim();
+  
+  if (normalizedPath.length === 0 || normalizedPath.length > 4096) {
+    return { valid: false, path: '', error: 'Path length must be between 1 and 4096 characters' };
+  }
+
+  if (normalizedPath.includes('..')) {
+    return { valid: false, path: '', error: 'Path traversal not allowed' };
+  }
+
+  const isAbsolute = normalizedPath.startsWith('/') || /^[a-zA-Z]:/.test(normalizedPath);
+  const isRelative = !isAbsolute && /^[a-zA-Z0-9_\-\.]+$/.test(normalizedPath);
+  
+  if (!isAbsolute && !isRelative) {
+    return { valid: false, path: '', error: 'Invalid path format' };
+  }
+
+  const resolved = isAbsolute ? normalizedPath : join(process.cwd(), normalizedPath);
+  
+  return { valid: true, path: resolved };
 }

@@ -38,6 +38,10 @@ export interface LeaderboardEntry {
   averageCacheHitRate: number | null;
   wasteScore: number | null;
   outcomeSuccessRate: number | null;
+  avgSuccessScore: number | null;
+  avgAnalysisConfidence: number | null;
+  avgReworkScore: number | null;
+  avgValueDensityScore: number | null;
 }
 
 export interface TeamSettings {
@@ -56,7 +60,7 @@ export interface PrivacyPolicy {
 }
 
 export const TTM_PRIVACY_POLICY: PrivacyPolicy = {
-  version: '1.0.0',
+  version: '1.1.0',
   sharedData: [
     'GitHub username and display name',
     'Avatar URL',
@@ -65,6 +69,10 @@ export const TTM_PRIVACY_POLICY: PrivacyPolicy = {
     'Total tokens and cost (aggregated)',
     'Cache hit rate (aggregated)',
     'Outcome success rate (aggregated)',
+    'Aggregated success score (Phase 009)',
+    'Aggregated analysis confidence (Phase 009)',
+    'Aggregated rework score (Phase 009)',
+    'Aggregated value density score (Phase 009)',
   ],
   neverSharedData: [
     'Session content (prompts, responses, code)',
@@ -73,6 +81,11 @@ export const TTM_PRIVACY_POLICY: PrivacyPolicy = {
     'Individual session data',
     'Reset window information',
     'Provider authentication tokens',
+    'Raw git diff content or repo change details',
+    'Raw verification command output or test traces',
+    'Individual success signal evidence',
+    'Completion state per session',
+    'Verification state per session',
   ],
   optInRequired: true,
   adminCanOverride: false,

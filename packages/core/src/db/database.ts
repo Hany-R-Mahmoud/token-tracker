@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { AdapterStorage, ProviderCheckpoint } from '../adapters/types.js';
 import type { CanonicalSession, ScoreFactor } from '../domain/session.js';
-import { SQLITE_SCHEMA_STATEMENTS } from './sqlite-schema.js';
+import { SQLITE_SCHEMA_STATEMENTS, SCHEMA_MIGRATIONS } from './sqlite-schema.js';
 import type {
   DailyBucket,
   ModelSummary,
@@ -25,6 +25,18 @@ export class TtmDatabase implements AdapterStorage {
     this.database = new DatabaseSync(databasePath);
     this.database.exec('PRAGMA foreign_keys = ON');
     this.database.exec(SQLITE_SCHEMA_STATEMENTS.join(';\n'));
+    this.applySchemaMigrations();
+  }
+
+  private applySchemaMigrations(): void {
+    for (const migration of SCHEMA_MIGRATIONS) {
+      try {
+        this.database.exec(migration);
+      } catch {
+        // Column may already exist from a previous run or manual schema change.
+        // ALTER TABLE ADD COLUMN is best-effort for existing databases.
+      }
+    }
   }
 
   public get path(): string {
@@ -252,8 +264,13 @@ export class TtmDatabase implements AdapterStorage {
         MAX(reset_window_resets_at) AS resetWindowResetsAt,
         MAX(reset_window_remaining_percent) AS resetWindowRemainingPercent,
         AVG(success_score) AS averageSuccessScore,
-        AVG(analysis_confidence) AS averageAnalysisConfidence
-      FROM sessions
+        AVG(analysis_confidence) AS averageAnalysisConfidence,
+        AVG(rework_score) AS averageReworkScore,
+        AVG(value_density_score) AS averageValueDensityScore,
+        SUM(CASE WHEN verification_state = 'verified' THEN 1 ELSE 0 END) AS verifiedSessions,
+        SUM(CASE WHEN verification_state = 'probable' THEN 1 ELSE 0 END) AS probableSessions,
+        SUM(CASE WHEN verification_state = 'missing' THEN 1 ELSE 0 END) AS missingVerificationSessions,
+        SUM(CASE WHEN verification_state = 'contradicted' THEN 1 ELSE 0 END) AS contradictedSessions      FROM sessions
       GROUP BY provider
       ORDER BY totalTokens DESC
     `).all() as unknown as SessionSummary[];
@@ -381,8 +398,6 @@ export class TtmDatabase implements AdapterStorage {
         verification_state AS verificationState,
         success_score AS successScore,
         analysis_confidence AS analysisConfidence
-        analysis_confidence AS analysisConfidence
-      FROM sessions
       ${whereClause}
       ORDER BY started_at DESC
       LIMIT ? OFFSET ?
@@ -622,8 +637,13 @@ export class TtmDatabase implements AdapterStorage {
         MAX(reset_window_resets_at) AS resetWindowResetsAt,
         MAX(reset_window_remaining_percent) AS resetWindowRemainingPercent,
         AVG(success_score) AS averageSuccessScore,
-        AVG(analysis_confidence) AS averageAnalysisConfidence
-      FROM sessions
+        AVG(analysis_confidence) AS averageAnalysisConfidence,
+        AVG(rework_score) AS averageReworkScore,
+        AVG(value_density_score) AS averageValueDensityScore,
+        SUM(CASE WHEN verification_state = 'verified' THEN 1 ELSE 0 END) AS verifiedSessions,
+        SUM(CASE WHEN verification_state = 'probable' THEN 1 ELSE 0 END) AS probableSessions,
+        SUM(CASE WHEN verification_state = 'missing' THEN 1 ELSE 0 END) AS missingVerificationSessions,
+        SUM(CASE WHEN verification_state = 'contradicted' THEN 1 ELSE 0 END) AS contradictedSessions      FROM sessions
       WHERE started_at >= date('now', ?)
       GROUP BY provider
       ORDER BY totalTokens DESC
@@ -660,6 +680,11 @@ export class TtmDatabase implements AdapterStorage {
         started_at AS startedAt,
         model,
         token_total AS tokenTotal,
+        token_input AS tokenInput,
+        token_output AS tokenOutput,
+        token_cached_input AS tokenCachedInput,
+        token_reasoning AS tokenReasoning,
+        cache_hit_rate AS cacheHitRate,
         cost_total_usd AS costTotalUsd,
         pricing_snapshot_id AS pricingSnapshotId,
         efficiency_score AS efficiencyScore,
@@ -755,5 +780,52 @@ function parseStringArray(json: string): string[] {
 }
 
 export function defaultDatabasePath(): string {
-  return process.env.TTM_DB_PATH ?? join(process.cwd(), '.ttm', 'ttm.sqlite');
+  const envPath = process.env.TTM_DB_PATH;
+  if (envPath) {
+    const validated = validateDatabasePath(envPath);
+    if (!validated.valid) {
+      throw new Error(`Invalid TTM_DB_PATH: ${validated.error}`);
+    }
+    return validated.path;
+  }
+  return join(process.cwd(), '.ttm', 'ttm.sqlite');
+}
+
+interface ValidationResult {
+  valid: boolean;
+  path: string;
+  error?: string;
+}
+
+function validateDatabasePath(path: string): ValidationResult {
+  if (!path || typeof path !== 'string') {
+    return { valid: false, path: '', error: 'Path must be a non-empty string' };
+  }
+
+  const normalizedPath = path.trim();
+  
+  if (normalizedPath.length === 0 || normalizedPath.length > 4096) {
+    return { valid: false, path: '', error: 'Path length must be between 1 and 4096 characters' };
+  }
+
+  if (normalizedPath.includes('..')) {
+    return { valid: false, path: '', error: 'Path traversal not allowed' };
+  }
+
+  const allowedPatterns = [
+    /^\/[a-zA-Z0-9_\-\./]+$/,
+    /^[a-zA-Z]:[\\\/]/,
+    /^~[\\\/]/,
+  ];
+  
+  const isAbsolute = normalizedPath.startsWith('/') || /^[a-zA-Z]:/.test(normalizedPath);
+  const isRelative = !isAbsolute && /^[a-zA-Z0-9_\-\.]+$/.test(normalizedPath);
+  
+  if (!isAbsolute && !isRelative) {
+    return { valid: false, path: '', error: 'Invalid path format' };
+  }
+
+  const resolved = isAbsolute ? normalizedPath : join(process.cwd(), normalizedPath);
+  
+  return { valid: true, path: resolved };
 }

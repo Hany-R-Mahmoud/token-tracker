@@ -11,6 +11,110 @@ Every metric in v1 must be:
 - robust to imperfect provider data
 - safe to display without pretending to know more than we know
 
+## Success Analysis Metrics (Phase 009)
+
+These metrics model success as an evidence-weighted judgment rather than a
+single opaque score. They combine provider-native signals, optional local
+evidence, and contradiction detection.
+
+### Completion State
+
+Definition:
+Whether the session appears to have finished meaningful work from the
+provider/session perspective.
+
+Values:
+- `completed`: strong provider-native completion evidence
+- `partial`: some progress, but no strong completion
+- `abandoned`: session stopped without completion and with weak forward signal
+- `reverted`: signals suggest reversal or contradiction after apparent progress
+- `unknown`: not enough evidence to classify
+
+Display rule:
+- show as a badge alongside outcome
+- never present as ground truth
+
+### Verification State
+
+Definition:
+Whether success appears to be technically confirmed by durable evidence.
+
+Values:
+- `verified`: explicit technical or durable completion evidence exists
+- `probable`: positive completion signals exist, but proof is incomplete
+- `contradicted`: evidence undermines apparent success
+- `missing`: verification evidence was not observed
+
+Display rule:
+- missing verification lowers confidence, does not imply failure
+- only show `verified` when real verification evidence exists
+
+### Success Score
+
+Definition:
+A 0-100 estimate of whether this session likely produced useful progress.
+
+Derived from weighted success signals scaled by analysis confidence.
+
+Display rule:
+- show alongside confidence indicator
+- color-code: green (>=70), yellow (40-69), red (<40)
+
+### Execution Quality Score
+
+Definition:
+How efficiently was progress reached? Strongly influenced by loops, retries,
+recovery cost, context inefficiency, and error-heavy execution.
+
+### Rework Score
+
+Definition:
+How much churn, reversal, or repair burden happened? Captures the "it moved
+forward but expensively and messily" story.
+
+### Value Density Score
+
+Definition:
+How much useful progress was achieved relative to spend, tokens, and time?
+The strongest answer to "was the consumption worth it?"
+
+### Analysis Confidence
+
+Definition:
+How much trustworthy evidence exists for the judgment. Separate from success
+itself.
+
+Computed from:
+- quantity of evidence
+- diversity of evidence levels (provider, repo, verification commands)
+- consistency of evidence
+- contradiction penalties
+
+Display rule:
+- show as percentage with high/moderate/low indicator
+- missing verification evidence lowers this more than success evidence
+
+### Success Signals
+
+Typed evidence items that feed the scores:
+
+| Kind | Direction | Description |
+|---|---|---|
+| `provider_completion` | positive/negative | Task complete markers, session duration |
+| `verification_command` | positive/negative | Test/build/lint success or failure |
+| `repo_change` | positive/negative | Git diff detected during session window |
+| `repair_loop` | negative | Repeated repair cycles detected |
+| `error_burst` | negative | Multiple errors in short succession |
+| `revert_indicator` | negative | Reversal or contradiction signals |
+| `cache_efficiency` | positive | Effective cache usage pattern |
+| `human_stop` | neutral | Session stopped by human intervention |
+
+Each signal carries: kind, direction, weight, confidence, label, evidence.
+
+Display rule:
+- show top positive and negative signals in session detail
+- never expose raw evidence in shared surfaces (leaderboard, web)
+
 ## Core Metrics
 
 ### Total Tokens

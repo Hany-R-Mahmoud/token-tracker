@@ -19,6 +19,10 @@ const DASHBOARD_URL: &str = "http://localhost:3100/";
 const MENUBAR_URL: &str = "http://localhost:3100/menubar";
 const DESKTOP_API_URL: &str = "http://localhost:3100/api/summary";
 
+fn get_api_key() -> String {
+    std::env::var("TTM_DESKTOP_API_KEY").unwrap_or_else(|_| "".to_string())
+}
+
 fn focus_window(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.show();
@@ -106,10 +110,15 @@ pub fn get_tray_cost_cents() -> u32 {
 fn poll_spend_and_update_tray(app: &AppHandle) {
     let app_handle = app.clone();
     std::thread::spawn(move || {
-        // Use a simple HTTP GET to fetch the summary
-        let response = ureq::get(DESKTOP_API_URL)
-            .timeout(Duration::from_secs(5))
-            .call();
+        let api_key = get_api_key();
+        let url = if api_key.is_empty() {
+            DESKTOP_API_URL.to_string()
+        } else {
+            format!("{}?api_key={}", DESKTOP_API_URL, api_key)
+        };
+
+        let request = ureq::get(&url).timeout(Duration::from_secs(5));
+        let response = request.call();
 
         match response {
             Ok(res) => {

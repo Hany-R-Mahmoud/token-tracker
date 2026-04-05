@@ -7,9 +7,11 @@ This folder contains all prompts, reports, and follow-up corrections exchanged b
 ```
 docs/handoffs/
   README.md                    ← This file
+  protocol/                    ← Shared compact execution/reporting baselines
   phase-007/                   ← Phase 007 handoff materials
   phase-008/                   ← Phase 008 handoff materials
   phase-009/                   ← Phase 009 handoff materials
+  phase-010/                   ← Phase 010 handoff materials
 ```
 
 ## Naming Convention
@@ -38,6 +40,18 @@ All files follow this pattern:
 
 Each phase/spec has its own subfolder. All handoff materials for that phase go in its folder.
 
+## Shared Protocol Files
+
+This archive also contains shared protocol files under `docs/handoffs/protocol/`
+for prompt compaction:
+
+- `compact-execution-baseline.md`
+- `compact-reporting-baseline.md`
+- `prompt-compaction-rules.md`
+
+Future prompts should reference these files instead of repeating large stable
+instruction blocks inline.
+
 ### When to Add Files
 
 1. **After sending a prompt**: Save the prompt as `codex-to-opencode-prompt-NN.md`
@@ -55,6 +69,7 @@ Each phase/spec has its own subfolder. All handoff materials for that phase go i
 
 | Phase | Spec | Folder | Status |
 |---|---|---|---|
-| Phase 007 | Success Analysis and Representation | `phase-007/` | In progress |
-| Phase 008 | Security Audit Remediation | `phase-008/` | In progress |
-| Phase 009 | Success Analysis Implementation | `phase-009/` | In progress |
+| Phase 007 | Rich Menubar Insights and Command Center | `phase-007/` | Archived |
+| Phase 008 | Visual System and Brand Refresh | `phase-008/` | Prompt/spec archived |
+| Phase 009 | Success Analysis and Representation | `phase-009/` | Archived |
+| Phase 010 | Session Context Audit and Compact Handoffs | `phase-010/` | Prompt/spec created |

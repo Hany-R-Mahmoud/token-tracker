@@ -11,6 +11,8 @@ import type {
   StoredSessionListItem,
 } from './types.js';
 import { TtmDatabase } from './database.js';
+import { auditSessionContext } from '../domain/context-audit.js';
+import type { ContextAuditResult, ContextPressureState } from '../domain/context-audit.js';
 
 export interface ReadSummarySnapshot {
   databasePath: string;
@@ -24,6 +26,11 @@ export interface ReadAnalyticsSnapshot {
   providerSummaries: SessionSummary[];
   modelSummaries: ModelSummary[];
   dailyBuckets: DailyBucket[];
+  recentSessions: SessionWithContextAudit[];
+}
+
+export interface SessionWithContextAudit extends StoredSessionListItem {
+  contextAudit: ContextAuditResult;
 }
 
 export class TtmReadService {
@@ -38,12 +45,30 @@ export class TtmReadService {
   }
 
   public getAnalyticsSnapshot(days = 30): ReadAnalyticsSnapshot {
+    const sessions = this.database.listSessionsForWindow(days, 100) as (StoredSessionListItem & { tokenInput: number; tokenOutput: number; tokenReasoning: number; tokenCachedInput: number; cacheHitRate: number | null })[];
+    const recentSessions: SessionWithContextAudit[] = sessions.map(s => ({
+      ...s,
+      contextAudit: auditSessionContext(
+        s.tokenInput,
+        s.tokenOutput,
+        s.tokenReasoning,
+        s.tokenCachedInput,
+        0,
+        s.model,
+        0,
+        null,
+        s.cacheHitRate,
+        s.successScore,
+        null
+      ),
+    }));
     return {
       databasePath: this.database.path,
       sessionCount: this.database.getSessionCountForWindow(days),
       providerSummaries: this.database.getProviderSummariesForWindow(days),
       modelSummaries: this.database.getModelSummariesForWindow(days),
       dailyBuckets: this.database.getDailyBuckets(days),
+      recentSessions,
     };
   }
 

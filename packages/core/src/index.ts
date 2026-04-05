@@ -9,6 +9,7 @@ export * from './db/sqlite-schema.js';
 export * from './db/storage.js';
 export * from './db/types.js';
 export * from './domain/comparison.js';
+export * from './domain/context-audit.js';
 export * from './domain/session.js';
 export * from './leaderboard/types.js';
 export * from './pricing/static-pricing.js';

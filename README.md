@@ -12,8 +12,10 @@ The local-first MVP, productization, and monitoring UX slices are implemented:
 - **Native wrapper**: Tauri v2 macOS app with tray/menu bar entry, compact menubar window, and dashboard window
 - **Local storage**: SQLite-backed at `.ttm/ttm.sqlite`
 - **Provider ingestion**: Codex and OpenCode adapters working on real local data
-- **Analysis**: efficiency scoring, waste detection, outcome classification, explanation factors
-- **Analytics**: provider cost distribution, model token distribution, daily tokens/cost trends, model breakdown table, daily activity table
+- **Analysis**: efficiency scoring, waste detection, outcome classification, explanation factors, success analysis (Phase 009)
+- **Success analysis**: completion state, verification state, success/execution quality/rework/value density scores, analysis confidence, typed success signals (Phase 009)
+- **Context audit**: context pressure state (low/medium/high/critical), context usage %, breakdown by user/assistant/reasoning/cache, evidence-based warnings, Phase 009 bridge for "high context / low value" detection (Phase 010)
+- **Analytics**: provider cost distribution, model token distribution, daily tokens/cost trends, model breakdown table, daily activity table, **context pressure distribution, context by provider, top sessions by usage** (Phase 010)
 - **Export**: local JSON export of normalized analytics (no raw prompts or transcripts) + SVG analytics summary card download
 - **Comparison**: manual-input comparison snapshots against reference apps (CodexBar, AI Token Monitor, Tokscale)
 - **Monitoring UX**: health indicator on menubar, per-provider reset progress bars (Codex only — from provider rate limit data; other providers show no reset bar), accessible filter form, human-readable reset context, file watching with configurable refresh cadence (1-60s, default 5s, persisted locally)
@@ -94,10 +96,11 @@ docs/
 
 The desktop is a Node.js HTTP server serving server-rendered HTML:
 
-- **`/`** — Overview with provider summaries (including reset column), labeled filter form, paginated sessions table, and clickable session links
+- **`/`** — Overview with provider summaries (including reset column), labeled filter form, paginated sessions table, clickable session links, **context health summary with near-limit/tool-heavy counts and most context-heavy sessions panel** (Phase 010)
+- **`/?session=<id>`** — Session detail panel with tokens, cost, efficiency, outcome, explanation factors, **context pressure, breakdown bar, warnings, and Phase 009 success bridge** (Phase 010)
 - **`/?session=<id>`** — Session detail panel with tokens, cost, efficiency, outcome, and explanation factors
 - **`/analytics`** — Analytics with provider cost distribution, model token distribution, daily tokens/cost trend charts, model breakdown table, and daily activity table
-- **`/menubar`** — Compact monitoring view (320px wide) with health indicator, aggregate bar, per-provider health dots + reset progress bars, 3 recent sessions, and "Open Dashboard" link
+- **`/menubar`** — Compact monitoring view (320px wide) with health indicator, aggregate bar, per-provider health dots + reset progress bars, 3 recent sessions, **context pressure cue in minimal mode** (Phase 010), and "Open Dashboard" link
 - **`/api/summary`** — JSON API returning the summary snapshot
 - **`/api/analytics`** — JSON API returning analytics snapshot (provider, model, daily buckets)
 - **`/export/analytics-svg`** — SVG analytics summary card download (800x500, aggregated data only)

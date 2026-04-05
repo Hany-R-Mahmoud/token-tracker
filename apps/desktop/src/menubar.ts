@@ -1,10 +1,11 @@
 import type { ReadSummarySnapshot, SessionSummary, StoredSessionListItem } from '@ttm/core';
+import type { ContextPressureState } from '@ttm/core';
 import { MENUBAR_STYLES } from './styles.js';
 import { escapeHtml, formatNumber, buildCountdownStr, menubarRelativeTime, menubarProviderHealth, menubarOverallHealth } from './helpers.js';
 
 const WEB_APP_URL = process.env.TTM_WEB_URL ?? 'http://localhost:3200';
 
-export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: StoredSessionListItem[], compactMode: 'detailed' | 'minimal' = 'detailed', myRank: { rank: number; totalMembers: number } | null = null): string {
+export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: StoredSessionListItem[], compactMode: 'detailed' | 'minimal' = 'detailed', myRank: { rank: number; totalMembers: number } | null = null, contextPressure: { low: number; medium: number; high: number; critical: number; unknown: number } | null = null): string {
   const totalCost = snapshot.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalCostUsd, 0);
   const totalSessions = snapshot.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.sessions, 0);
   const totalTokens = snapshot.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalTokens, 0);
@@ -25,6 +26,24 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
     if (avgEfficiency >= 0.7) { effLabel = 'Efficient spend'; effClass = 'mb-effectiveness-efficient'; }
     else if (avgEfficiency >= 0.4) { effLabel = 'Mixed results'; effClass = 'mb-effectiveness-mixed'; }
     else { effLabel = 'Waste-heavy'; effClass = 'mb-effectiveness-waste-heavy'; }
+  }
+
+  // Phase 009 success analysis summary
+  const providersWithSuccess = snapshot.providerSummaries.filter((p: SessionSummary) => p.averageSuccessScore !== null);
+  const avgSuccessScore = providersWithSuccess.length > 0
+    ? providersWithSuccess.reduce((sum: number, p: SessionSummary) => sum + (p.averageSuccessScore ?? 0), 0) / providersWithSuccess.length
+    : null;
+  const avgConfidence = providersWithSuccess.length > 0
+    ? providersWithSuccess.reduce((sum: number, p: SessionSummary) => sum + (p.averageAnalysisConfidence ?? 0), 0) / providersWithSuccess.length
+    : null;
+
+  let successLabel = '';
+  let successBg = '';
+  let successText = '';
+  if (avgSuccessScore !== null) {
+    if (avgSuccessScore >= 70) { successLabel = 'Likely productive'; successBg = 'var(--mb-success-bg)'; successText = 'var(--mb-success-text)'; }
+    else if (avgSuccessScore >= 40) { successLabel = 'Mixed results'; successBg = 'var(--mb-warning-bg)'; successText = 'var(--mb-warning-text)'; }
+    else { successLabel = 'Likely wasteful'; successBg = 'var(--mb-critical-bg)'; successText = 'var(--mb-critical-text)'; }
   }
 
   // Outcome distribution
@@ -72,6 +91,23 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
     ? `<div class="mb-team-row"><span class="mb-team-rank">#${myRank.rank}</span><span class="mb-team-label">of ${myRank.totalMembers} members</span></div>`
     : `<div class="mb-team-row"><span class="mb-team-label" style="color:#9ca3af">Leaderboard not connected</span></div>`;
 
+  // Success cue HTML for hero
+  const successCueHtml = successLabel
+    ? `<span class="mb-effectiveness" style="background:${successBg};color:${successText}">${successLabel}${avgConfidence !== null ? ` · ${(avgConfidence * 100).toFixed(0)}% conf` : ''}</span>`
+    : '';
+
+  // Context pressure cue (compact)
+  let contextCueHtml = '';
+  if (contextPressure) {
+    const total = contextPressure.low + contextPressure.medium + contextPressure.high + contextPressure.critical + contextPressure.unknown;
+    if (total > 0 && compactMode === 'minimal') {
+      const nearLimit = contextPressure.high + contextPressure.critical;
+      if (nearLimit > 0) {
+        contextCueHtml = `<span class="mb-effectiveness" style="background:var(--mb-warning-bg);color:var(--mb-warning-text)">${nearLimit} near limit</span>`;
+      }
+    }
+  }
+
   // No data state
   if (totalSessions === 0) {
     return `<!DOCTYPE html>
@@ -107,7 +143,7 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
     ${compactMode === 'detailed' ? '<span class="mb-mode-toggle" id="mode-toggle" title="Toggle compact mode">▤</span>' : ''}
   </div>
 
-  <!-- 2. Hero: spend + effectiveness -->
+  <!-- 2. Hero: spend + effectiveness + success cue -->
   <div class="mb-hero">
     <div class="mb-hero-cost">$${totalCost.toFixed(2)}</div>
     <div class="mb-hero-meta">
@@ -115,6 +151,8 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
       <span>${formatNumber(totalTokens)} tokens</span>
     </div>
     <span class="mb-effectiveness ${effClass}">${effLabel}${successRate !== null ? ` · ${(successRate * 100).toFixed(0)}% success` : ''}</span>
+    ${successCueHtml}
+    ${contextCueHtml}
   </div>
 
   ${compactMode === 'detailed' ? `
@@ -157,8 +195,8 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
   <div class="mb-actions">
     <a class="mb-action-btn mb-action-btn-primary" href="/">Dashboard</a>
     <a class="mb-action-btn" href="/analytics">Analytics</a>
-    <a class="mb-action-btn" href="${WEB_APP_URL}/leaderboard" target="_blank" rel="noopener" class="external-link">Leaderboard ↗</a>
-    <a class="mb-action-btn" href="${WEB_APP_URL}/settings" target="_blank" rel="noopener" class="external-link">Settings ↗</a>
+    <a class="mb-action-btn" href="${WEB_APP_URL}/leaderboard" target="_blank" rel="noopener external-link">Leaderboard ↗</a>
+    <a class="mb-action-btn" href="${WEB_APP_URL}/settings" target="_blank" rel="noopener external-link">Settings ↗</a>
   </div>
 
   ${compactMode === 'detailed' ? `<script>

@@ -158,9 +158,141 @@ function collectSignals(seed: CanonicalSessionSeed, outcome: SessionOutcome): Su
     });
   }
 
+  // Level 2: Local repo / git evidence (best-effort)
+  collectGitEvidence(seed, signals);
+
+  // Level 3: Verification-command evidence (best-effort)
+  collectVerificationEvidence(seed, signals);
+
   return signals;
 }
 
+// --- Level 2: Git/Repo Evidence ---
+
+function collectGitEvidence(seed: CanonicalSessionSeed, signals: SuccessSignal[]): void {
+  const projectPath = seed.projectPath;
+  if (!projectPath) return;
+
+  // Check for git repo change indicators in provider metadata
+  const metadata = seed.metadata.providerMetadata as Record<string, unknown>;
+  const gitDiffLines = metadata.gitDiffLines as number | undefined;
+  const gitFilesChanged = metadata.gitFilesChanged as number | undefined;
+  const hasGitChanges = metadata.hasGitChanges as boolean | undefined;
+
+  if (gitDiffLines !== undefined && gitDiffLines > 0) {
+    signals.push({
+      kind: 'repo_change',
+      direction: 'positive',
+      weight: 0.2,
+      confidence: 0.7,
+      label: 'Git diff detected during session window',
+      evidence: `${gitDiffLines} lines changed across ${gitFilesChanged ?? '?'} files`,
+    });
+  } else if (gitFilesChanged !== undefined && gitFilesChanged > 0) {
+    signals.push({
+      kind: 'repo_change',
+      direction: 'positive',
+      weight: 0.15,
+      confidence: 0.6,
+      label: 'Files changed during session window',
+      evidence: `${gitFilesChanged} file(s) modified`,
+    });
+  } else if (hasGitChanges === true) {
+    signals.push({
+      kind: 'repo_change',
+      direction: 'positive',
+      weight: 0.1,
+      confidence: 0.5,
+      label: 'Repository changes detected',
+      evidence: 'Git repo shows changes during session',
+    });
+  }
+}
+
+// --- Level 3: Verification Command Evidence ---
+
+function collectVerificationEvidence(seed: CanonicalSessionSeed, signals: SuccessSignal[]): void {
+  const metadata = seed.metadata.providerMetadata as Record<string, unknown>;
+
+  // Check for verification command results in provider metadata
+  const verificationPassed = metadata.verificationPassed as boolean | undefined;
+  const verificationFailed = metadata.verificationFailed as boolean | undefined;
+  const testResults = metadata.testResults as { passed: number; failed: number } | undefined;
+  const buildSucceeded = metadata.buildSucceeded as boolean | undefined;
+
+  if (verificationPassed === true) {
+    signals.push({
+      kind: 'verification_command',
+      direction: 'positive',
+      weight: 0.3,
+      confidence: 0.85,
+      label: 'Verification command passed',
+      evidence: 'Explicit verification success detected',
+    });
+  }
+
+  if (verificationFailed === true) {
+    signals.push({
+      kind: 'verification_command',
+      direction: 'negative',
+      weight: 0.25,
+      confidence: 0.8,
+      label: 'Verification command failed',
+      evidence: 'Explicit verification failure detected',
+    });
+  }
+
+  if (testResults !== undefined) {
+    let parsed: { passed: number; failed: number } | null = null;
+    if (typeof testResults === 'string') {
+      try { parsed = JSON.parse(testResults); } catch { /* ignore */ }
+    } else if (typeof testResults === 'object' && testResults !== null) {
+      parsed = testResults as { passed: number; failed: number };
+    }
+
+    if (parsed !== null) {
+      if (parsed.failed === 0 && parsed.passed > 0) {
+        signals.push({
+          kind: 'verification_command',
+          direction: 'positive',
+          weight: 0.25,
+          confidence: 0.85,
+          label: `All ${parsed.passed} tests passed`,
+          evidence: `${parsed.passed} passed, 0 failed`,
+        });
+      } else if (parsed.failed > 0) {
+        signals.push({
+          kind: 'verification_command',
+          direction: 'negative',
+          weight: 0.2,
+          confidence: 0.8,
+          label: `${parsed.failed} test(s) failed`,
+          evidence: `${parsed.passed} passed, ${parsed.failed} failed`,
+        });
+      }
+    }
+  }
+
+  if (buildSucceeded === true) {
+    signals.push({
+      kind: 'verification_command',
+      direction: 'positive',
+      weight: 0.2,
+      confidence: 0.8,
+      label: 'Build succeeded',
+      evidence: 'Build/compile command passed',
+    });
+  } else if (buildSucceeded === false) {
+    signals.push({
+      kind: 'verification_command',
+      direction: 'negative',
+      weight: 0.2,
+      confidence: 0.8,
+      label: 'Build failed',
+      evidence: 'Build/compile command failed',
+    });
+  }
+}
 // --- Completion State ---
 
 function determineCompletionState(outcome: SessionOutcome, signals: SuccessSignal[]): CompletionState {

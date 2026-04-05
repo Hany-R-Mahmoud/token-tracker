@@ -200,8 +200,8 @@ describe('database period-aware queries', () => {
     const recentDate = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString(); // 3 days ago
     const oldDate = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString(); // 60 days ago
 
-    db.upsertSession({ sessionId: 'recent', githubId: 12345, teamId: 'test-team', provider: 'codex', startedAt: recentDate, endedAt: null, model: 'gpt-5', tokenTotal: 1000, costTotalUsd: 1.0, efficiencyScore: 50, wasteScore: 0.2, cacheHitRate: 0.3, outcome: 'success', outcomeConfidence: 0.8 });
-    db.upsertSession({ sessionId: 'old', githubId: 12345, teamId: 'test-team', provider: 'codex', startedAt: oldDate, endedAt: null, model: 'gpt-5', tokenTotal: 2000, costTotalUsd: 2.0, efficiencyScore: 60, wasteScore: 0.3, cacheHitRate: 0.4, outcome: 'success', outcomeConfidence: 0.9 });
+    db.upsertSession({ sessionId: 'recent', githubId: 12345, teamId: 'test-team', provider: 'codex', startedAt: recentDate, endedAt: null, model: 'gpt-5', tokenTotal: 1000, costTotalUsd: 1.0, efficiencyScore: 50, wasteScore: 0.2, cacheHitRate: 0.3, outcome: 'success', outcomeConfidence: 0.8, completionState: null, verificationState: null, successScore: null, executionQualityScore: null, reworkScore: null, valueDensityScore: null, analysisConfidence: null });
+    db.upsertSession({ sessionId: 'old', githubId: 12345, teamId: 'test-team', provider: 'codex', startedAt: oldDate, endedAt: null, model: 'gpt-5', tokenTotal: 2000, costTotalUsd: 2.0, efficiencyScore: 60, wasteScore: 0.3, cacheHitRate: 0.4, outcome: 'success', outcomeConfidence: 0.9, completionState: null, verificationState: null, successScore: null, executionQualityScore: null, reworkScore: null, valueDensityScore: null, analysisConfidence: null });
 
     const weekSessions = db.getUserSessions(12345, 'test-team', 7);
     const monthSessions = db.getUserSessions(12345, 'test-team', 30);
@@ -345,6 +345,13 @@ describe('real app HTTP endpoints', () => {
         cacheHitRate: 0.3,
         outcome: 'success',
         outcomeConfidence: 0.8,
+        completionState: null,
+        verificationState: null,
+        successScore: null,
+        executionQualityScore: null,
+        reworkScore: null,
+        valueDensityScore: null,
+        analysisConfidence: null,
       });
       db.upsertSession({
         sessionId: `special-session-${i}`,
@@ -361,6 +368,13 @@ describe('real app HTTP endpoints', () => {
         cacheHitRate: 0.4,
         outcome: 'success',
         outcomeConfidence: 0.9,
+        completionState: null,
+        verificationState: null,
+        successScore: null,
+        executionQualityScore: null,
+        reworkScore: null,
+        valueDensityScore: null,
+        analysisConfidence: null,
       });
     }
 

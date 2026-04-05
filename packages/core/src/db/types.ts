@@ -13,6 +13,12 @@ export interface SessionSummary {
   resetWindowRemainingPercent: number | null;
   averageSuccessScore: number | null;
   averageAnalysisConfidence: number | null;
+  averageReworkScore: number | null;
+  averageValueDensityScore: number | null;
+  verifiedSessions: number;
+  probableSessions: number;
+  missingVerificationSessions: number;
+  contradictedSessions: number;
 }
 
 export interface SessionListFilters {
