@@ -157,8 +157,8 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
   <div class="mb-actions">
     <a class="mb-action-btn mb-action-btn-primary" href="/">Dashboard</a>
     <a class="mb-action-btn" href="/analytics">Analytics</a>
-    <a class="mb-action-btn" href="${WEB_APP_URL}/leaderboard" target="_blank" rel="noopener">Leaderboard</a>
-    <a class="mb-action-btn" href="${WEB_APP_URL}/settings" target="_blank" rel="noopener">Settings</a>
+    <a class="mb-action-btn" href="${WEB_APP_URL}/leaderboard" target="_blank" rel="noopener" class="external-link">Leaderboard ↗</a>
+    <a class="mb-action-btn" href="${WEB_APP_URL}/settings" target="_blank" rel="noopener" class="external-link">Settings ↗</a>
   </div>
 
   ${compactMode === 'detailed' ? `<script>

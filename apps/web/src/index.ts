@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { TtmDatabase, defaultDatabasePath } from '@ttm/core';
 import { LeaderboardDatabase, defaultLeaderboardDatabasePath } from './db.js';
 import { computeLeaderboardSnapshot, type SessionData, MINIMUM_PARTICIPATION_THRESHOLD } from './scoring.js';
@@ -96,7 +96,7 @@ const STYLES = `
 `;
 
 function escapeHtml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;').replace(/`/g, '&#x60;');
 }
 
 function formatNumber(value: number): string {
@@ -703,11 +703,18 @@ export function createApp(
   );
 
   return (req: IncomingMessage, res: ServerResponse) => {
+    // Security headers
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'");
+
     const { path, query } = parseUrlPath(req.url ?? '/');
     const cookies = parseCookies(req.headers.cookie);
     const sessionId = cookies[SESSION_COOKIE_NAME];
     const session = sessionId ? db.getWebSession(sessionId) : null;
-    const devGithubId = !session && !githubClientId && cookies.github_id ? Number(cookies.github_id) : null;
+    const devGithubId = process.env.TTM_DEV_AUTH === 'true' && !session && !githubClientId && cookies.github_id ? Number(cookies.github_id) : null;
+    if (devGithubId) process.stderr.write('[WARNING] Dev-mode auth active (TTM_DEV_AUTH=true). Do not use in production.\n');
     const githubId = session?.githubId ?? devGithubId ?? null;
     const persistedUser = githubId ? db.getGitHubUser(githubId) : null;
     const githubUser = persistedUser ?? (devGithubId
@@ -749,7 +756,7 @@ export function createApp(
 
       const origin = resolveOrigin(req, config.webOrigin ?? WEB_ORIGIN);
       const redirectUri = `${origin}/auth/github/callback`;
-      const state = Math.random().toString(36).slice(2);
+      const state = crypto.randomUUID().replace(/-/g, "");
       const scope = 'read:user,user:email';
       const url = `https://github.com/login/oauth/authorize?client_id=${githubClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`;
       res.writeHead(302, { Location: url, 'Set-Cookie': buildOAuthStateCookie(state, req) });
@@ -813,12 +820,12 @@ export function createApp(
           res.end();
         })
         .catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : 'GitHub OAuth failed';
+          process.stderr.write(`[ERROR] OAuth callback failed: ${error instanceof Error ? error.message : String(error)}\n`);
           res.writeHead(502, {
             'Content-Type': 'text/plain',
             'Set-Cookie': buildClearedOAuthStateCookie(req),
           });
-          res.end(message);
+          res.end('Authentication failed. Please try again.');
         });
       return;
     }
@@ -909,7 +916,9 @@ export function createApp(
       // Basic admin protection: requires TTM_ADMIN_API_KEY header
       if (adminApiKey) {
         const authHeader = req.headers.authorization ?? '';
-        if (authHeader !== `Bearer ${adminApiKey}`) {
+        const expected = Buffer.from(`Bearer ${adminApiKey}`, 'utf8');
+        const actual = Buffer.from(authHeader, 'utf8');
+        if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
           res.writeHead(403, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'admin API key required' }));
           return;

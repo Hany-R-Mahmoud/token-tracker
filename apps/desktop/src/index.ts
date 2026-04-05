@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { writeFileSync, mkdirSync, watchFile, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { watchFile, existsSync } from 'node:fs';
+import type { Stats } from 'node:fs';
 import { TtmDatabase, TtmReadService, defaultDatabasePath } from '@ttm/core';
 import { buildAnalyticsSummarySvg } from './export-svg.js';
 import type {
@@ -20,6 +20,29 @@ import { loadPreferences, savePreferences, type MonitoringPreferences } from './
 
 const PORT = Number(process.env.TTM_DESKTOP_PORT ?? '3100');
 
+// Security headers applied to all HTTP responses
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+};
+
+function applySecurityHeaders(res: ServerResponse): void {
+  for (const [header, value] of Object.entries(SECURITY_HEADERS)) {
+    res.setHeader(header, value);
+  }
+}
+
+// Generic error handler — never leak internal details to clients
+function sendError(res: ServerResponse, statusCode: number, publicMessage: string, logMessage?: string): void {
+  if (logMessage) {
+    process.stderr.write(`[ERROR] ${logMessage}\n`);
+  }
+  res.writeHead(statusCode, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end(publicMessage);
+}
+
 function buildErrorHtml(message: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -27,7 +50,7 @@ function buildErrorHtml(message: string): string {
 <title>Token Tracker — Error</title><style>${PAGE_STYLES}</style></head>
 <body>
   <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a></nav>
-  <main><h1>Error</h1><p class="error">${escapeHtml(message)}</p></main>
+  <main><h1>Error</h1><p class="error">An unexpected error occurred. Please try again.</p></main>
 </body></html>`;
 }
 
@@ -43,14 +66,14 @@ function buildEmptyHtml(): string {
 }
 
 function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessionListItem[], activeProvider: string | null, activeModel: string | null, activeQ: string | null, listResult: { sessions: StoredSessionListItem[]; total: number; page: number; pageSize: number; totalPages: number } | null, modelOptions: { model: string; sessionCount: number }[]): string {
-  const totalTokens = snapshot.providerSummaries.reduce((s, p) => s + p.totalTokens, 0);
-  const totalCost = snapshot.providerSummaries.reduce((s, p) => s + p.totalCostUsd, 0);
+  const totalTokens = snapshot.providerSummaries.reduce((s: number, p: SessionSummary) => s + p.totalTokens, 0);
+  const totalCost = snapshot.providerSummaries.reduce((s: number, p: SessionSummary) => s + p.totalCostUsd, 0);
   const providerRows = snapshot.providerSummaries.length > 0
-    ? snapshot.providerSummaries.map((summary) => buildProviderRow(summary)).join('\n')
+    ? snapshot.providerSummaries.map((summary: SessionSummary) => buildProviderRow(summary)).join('\n')
     : '<tr><td colspan="6" class="empty">no sessions recorded</td></tr>';
 
   const sessionRows = sessions.length > 0
-    ? sessions.map((session) => buildSessionRow(session)).join('\n')
+    ? sessions.map((session: StoredSessionListItem) => buildSessionRow(session)).join('\n')
     : '<tr><td colspan="6" class="empty">no sessions to display</td></tr>';
 
   const paginationHtml = listResult
@@ -98,20 +121,20 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
   <div class="section">
     <h2>Filter Sessions</h2>
     <form method="get" action="/" class="filter-form">
-      <label class="filter-label">Provider
-        <select name="provider">
+      <label class="filter-label" for="filter-provider">Provider
+        <select name="provider" id="filter-provider">
           <option value="">All providers</option>
-          ${snapshot.providerSummaries.map((p) => `<option value="${escapeHtml(p.provider)}"${activeProvider === p.provider ? ' selected' : ''}>${escapeHtml(p.provider)}</option>`).join('')}
+          ${snapshot.providerSummaries.map((p: SessionSummary) => `<option value="${escapeHtml(p.provider)}"${activeProvider === p.provider ? ' selected' : ''}>${escapeHtml(p.provider)}</option>`).join('')}
         </select>
       </label>
-      <label class="filter-label">Model
-        <select name="model">
+      <label class="filter-label" for="filter-model">Model
+        <select name="model" id="filter-model">
           <option value="">All models</option>
-          ${modelOptions.map((m) => `<option value="${escapeHtml(m.model)}"${activeModel === m.model ? ' selected' : ''}>${escapeHtml(m.model)}</option>`).join('')}
+          ${modelOptions.map((m: { model: string; sessionCount: number }) => `<option value="${escapeHtml(m.model)}"${activeModel === m.model ? ' selected' : ''}>${escapeHtml(m.model)}</option>`).join('')}
         </select>
       </label>
-      <label class="filter-label">Search
-        <input type="text" name="q" placeholder="Search title, session ID..." value="${escapeHtml(activeQ ?? '')}">
+      <label class="filter-label" for="filter-search">Search
+        <input type="text" name="q" id="filter-search" placeholder="Search title, session ID..." value="${escapeHtml(activeQ ?? '')}">
       </label>
       <button type="submit">Filter</button>
       ${activeProvider || activeModel || activeQ ? '<a href="/" class="clear-link">Clear</a>' : ''}
@@ -120,34 +143,54 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
 
   <div class="section">
     <h2>Provider Summaries</h2>
+    <div class="table-wrapper">
     <table>
+      <colgroup>
+        <col class="col-provider">
+        <col class="col-sessions">
+        <col class="col-tokens">
+        <col class="col-cost">
+        <col class="col-reset">
+        <col class="col-efficiency">
+      </colgroup>
       <thead><tr><th>Provider</th><th>Sessions</th><th>Total Tokens</th><th>Cost (USD)</th><th>Reset</th><th>Avg Efficiency</th></tr></thead>
       <tbody>${providerRows}</tbody>
     </table>
+    </div>
   </div>
 
   <div class="section">
     <h2>Recent Sessions</h2>
+    <div class="table-wrapper">
     <table>
+      <colgroup>
+        <col class="col-session">
+        <col class="col-provider-sm">
+        <col class="col-model">
+        <col class="col-tokens-sm">
+        <col class="col-cost-sm">
+        <col class="col-outcome">
+      </colgroup>
       <thead><tr><th>Session</th><th>Provider</th><th>Model</th><th>Tokens</th><th>Cost</th><th>Outcome</th></tr></thead>
       <tbody>${sessionRows}</tbody>
     </table>
+    </div>
   </div>
 
   ${paginationHtml}
 
   <p class="footer-note">
-    <a href="/export/analytics-svg" class="copy-btn" style="background:#16a34a;text-decoration:none">📥 Download SVG</a>
-    <button class="copy-btn" onclick="copyAnalyticsSummary()">📋 Copy text</button>
+    <a href="/export/analytics-svg" class="btn-primary">📥 Download SVG</a>
+    <button class="btn-secondary" onclick="copyOverviewSummary()">📋 Copy summary</button>
   </p>
   <script>
-    function copyAnalyticsSummary() {
-      var text = document.querySelector('.analytics-group')?.innerText || '';
+    function copyOverviewSummary() {
       var stats = document.querySelector('.stats-row')?.innerText || '';
-      var summary = 'Token Tracker Analytics\n' + stats.trim() + '\n\n' + text.trim();
+      var tables = Array.from(document.querySelectorAll('table')).map(function(t) { return t.innerText; }).join('\\n\\n');
+      var summary = 'Token Tracker Overview\\n' + stats.trim() + '\\n\\n' + tables;
       navigator.clipboard.writeText(summary).then(function() {
-        var btn = document.querySelector('.copy-btn');
-        if (btn) { btn.textContent = '✓ Copied'; setTimeout(function() { btn.textContent = '📋 Copy text'; }, 2000); }
+        var btn = document.querySelector('.btn-secondary');
+        if (btn) { btn.textContent = '✓ Copied'; setTimeout(function() { btn.textContent = '📋 Copy summary'; }, 2000); }
       }).catch(function() {});
     }
 
@@ -271,36 +314,36 @@ function buildPaginationHtml(listResult: { total: number; page: number; pageSize
 }
 
 function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number): string {
-  const totalTokens = analytics.providerSummaries.reduce((sum, p) => sum + p.totalTokens, 0);
-  const totalCost = analytics.providerSummaries.reduce((sum, p) => sum + p.totalCostUsd, 0);
+  const totalTokens = analytics.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalTokens, 0);
+  const totalCost = analytics.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalCostUsd, 0);
 
-  const maxProviderCost = Math.max(...analytics.providerSummaries.map((p) => p.totalCostUsd), 0.01);
-  const providerDistBars = analytics.providerSummaries.map((p) => {
+  const maxProviderCost = Math.max(...analytics.providerSummaries.map((p: SessionSummary) => p.totalCostUsd), 0.01);
+  const providerDistBars = analytics.providerSummaries.map((p: SessionSummary) => {
     const width = Math.max(2, (p.totalCostUsd / maxProviderCost) * 100);
     return `<div class="chart-row"><div class="chart-bar"><span>${escapeHtml(p.provider)}</span><span>$${p.totalCostUsd.toFixed(2)}</span></div><div class="bar" style="width:${Math.round(width)}%"></div></div>`;
   }).join('\n');
 
-  const maxModelTokens = Math.max(...analytics.modelSummaries.map((m) => m.totalTokens), 1);
-  const modelDistBars = analytics.modelSummaries.slice(0, 10).map((m) => {
+  const maxModelTokens = Math.max(...analytics.modelSummaries.map((m: ModelSummary) => m.totalTokens), 1);
+  const modelDistBars = analytics.modelSummaries.slice(0, 10).map((m: ModelSummary) => {
     const width = Math.max(2, (m.totalTokens / maxModelTokens) * 100);
     return `<div class="chart-row"><div class="chart-bar"><span>${escapeHtml(m.model)}</span><span>${formatNumber(m.totalTokens)}</span></div><div class="bar" style="width:${Math.round(width)}%;background:#7c3aed"></div></div>`;
   }).join('\n');
 
   const dailyBuckets = analytics.dailyBuckets.slice(-14);
-  const maxDailyTokens = Math.max(...dailyBuckets.map((d) => d.totalTokens), 1);
-  const maxDailyCost = Math.max(...dailyBuckets.map((d) => d.totalCostUsd), 0.01);
+  const maxDailyTokens = Math.max(...dailyBuckets.map((d: DailyBucket) => d.totalTokens), 1);
+  const maxDailyCost = Math.max(...dailyBuckets.map((d: DailyBucket) => d.totalCostUsd), 0.01);
 
-  const tokenChartBars = dailyBuckets.map((d) => {
+  const tokenChartBars = dailyBuckets.map((d: DailyBucket) => {
     const width = Math.max(2, (d.totalTokens / maxDailyTokens) * 100);
     return `<div class="chart-row"><div class="bar" style="width:${Math.round(width)}%" title="${d.date}: ${formatNumber(d.totalTokens)} tokens"></div><div class="bar-label">${d.date} — ${formatNumber(d.totalTokens)} tokens</div></div>`;
   }).join('\n');
 
-  const costChartBars = dailyBuckets.map((d) => {
+  const costChartBars = dailyBuckets.map((d: DailyBucket) => {
     const width = Math.max(2, (d.totalCostUsd / maxDailyCost) * 100);
     return `<div class="chart-row"><div class="bar" style="width:${Math.round(width)}%;background:#16a34a" title="${d.date}: $${d.totalCostUsd.toFixed(2)}"></div><div class="bar-label">${d.date} — $${d.totalCostUsd.toFixed(2)}</div></div>`;
   }).join('\n');
 
-  const dailyRows = dailyBuckets.map((d) => {
+  const dailyRows = dailyBuckets.map((d: DailyBucket) => {
     return `<tr>
       <td>${escapeHtml(d.date)}</td>
       <td>${d.sessions}</td>
@@ -310,7 +353,7 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
     </tr>`;
   }).join('\n');
 
-  const cells = dailyBuckets.map((d) => {
+  const cells = dailyBuckets.map((d: DailyBucket) => {
     const opacity = Math.max(0.15, d.totalTokens / maxDailyTokens);
     const title = `${d.date}: ${d.sessions} sessions, ${formatNumber(d.totalTokens)} tokens`;
     return `<div class="heatmap-cell" style="opacity:${opacity}" title="${escapeHtml(title)}"></div>`;
@@ -367,10 +410,12 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
 
   <div class="section">
     <h2>Model Breakdown</h2>
+    <div class="table-wrapper">
     <table>
       <thead><tr><th>Model</th><th>Provider</th><th>Sessions</th><th>Tokens</th><th>Cost (USD)</th><th>Avg Efficiency</th></tr></thead>
-      <tbody>${analytics.modelSummaries.map((m) => `<tr><td>${escapeHtml(m.model)}</td><td>${escapeHtml(m.provider)}</td><td>${m.sessions}</td><td>${formatNumber(m.totalTokens)}</td><td>$${m.totalCostUsd.toFixed(2)}</td><td>${m.averageEfficiency !== null ? m.averageEfficiency.toFixed(0) : 'n/a'}</td></tr>`).join('\n')}</tbody>
+      <tbody>${analytics.modelSummaries.map((m: ModelSummary) => `<tr><td>${escapeHtml(m.model)}</td><td>${escapeHtml(m.provider)}</td><td>${m.sessions}</td><td>${formatNumber(m.totalTokens)}</td><td>$${m.totalCostUsd.toFixed(2)}</td><td>${m.averageEfficiency !== null ? m.averageEfficiency.toFixed(0) : 'n/a'}</td></tr>`).join('\n')}</tbody>
     </table>
+    </div>
   </div>
 
   <div class="analytics-group">
@@ -394,25 +439,27 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
 
   <div class="section">
     <h2>Daily Activity (Last ${dailyBuckets.length} Days)</h2>
+    <div class="table-wrapper">
     <table>
       <thead><tr><th>Date</th><th>Sessions</th><th>Tokens</th><th>Cost (USD)</th><th>Avg Efficiency</th></tr></thead>
       <tbody>${dailyRows || '<tr><td colspan="5" class="empty">no daily data</td></tr>'}</tbody>
     </table>
     </div>
+    </div>
   </div>
 
   <p class="footer-note">
-    <a href="/export/analytics-svg" class="copy-btn" style="background:#16a34a;text-decoration:none">📥 Download SVG</a>
-    <button class="copy-btn" onclick="copyAnalyticsSummary()">📋 Copy text</button>
+    <a href="/export/analytics-svg" class="btn-primary">📥 Download SVG</a>
+    <button class="btn-secondary" onclick="copyAnalyticsSummary()">📋 Copy summary</button>
   </p>
   <script>
     function copyAnalyticsSummary() {
       var text = document.querySelector('.analytics-group')?.innerText || '';
       var stats = document.querySelector('.stats-row')?.innerText || '';
-      var summary = 'Token Tracker Analytics\n' + stats.trim() + '\n\n' + text.trim();
+      var summary = 'Token Tracker Analytics\\n' + stats.trim() + '\\n\\n' + text.trim();
       navigator.clipboard.writeText(summary).then(function() {
-        var btn = document.querySelector('.copy-btn');
-        if (btn) { btn.textContent = '✓ Copied'; setTimeout(function() { btn.textContent = '📋 Copy text'; }, 2000); }
+        var btn = document.querySelector('.btn-secondary');
+        if (btn) { btn.textContent = '✓ Copied'; setTimeout(function() { btn.textContent = '📋 Copy summary'; }, 2000); }
       }).catch(function() {});
     }
   </script>
@@ -460,18 +507,18 @@ function buildDetailHtml(session: StoredSessionDetail): string {
 
   <div class="section">
     <h3>Outcome Reasons</h3>
-    ${session.outcomeReasons.length > 0 ? `<ul>${session.outcomeReasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>` : '<p class="empty">No outcome reasons recorded.</p>'}
+    ${session.outcomeReasons.length > 0 ? `<ul>${session.outcomeReasons.map((r: string) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>` : '<p class="empty">No outcome reasons recorded.</p>'}
   </div>
 
   <div class="section">
     <h3>Waste Reasons</h3>
-    ${session.wasteReasons.length > 0 ? `<ul>${session.wasteReasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>` : '<p class="empty">No waste reasons recorded.</p>'}
+    ${session.wasteReasons.length > 0 ? `<ul>${session.wasteReasons.map((r: string) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>` : '<p class="empty">No waste reasons recorded.</p>'}
   </div>
 
   <div class="section">
     <h3>Score Factors</h3>
     ${session.scoreFactors.length > 0
-      ? `<ul class="factor-list">${session.scoreFactors.map((f) => {
+      ? `<ul class="factor-list">${session.scoreFactors.map((f: { direction: string; label: string; impact: number }) => {
           const cls = f.direction === 'positive' ? 'factor-positive' : f.direction === 'negative' ? 'factor-negative' : 'factor-neutral';
           return `<li class="factor-item ${cls}">${escapeHtml(f.label)} (impact: ${f.impact})</li>`;
         }).join('')}</ul>`
@@ -522,6 +569,8 @@ function handleRequest(
   response: ServerResponse,
   readService: TtmReadService,
 ): void {
+  applySecurityHeaders(response);
+
   const rawUrl = request.url ?? '/';
   const { path, sessionId, provider, model, q, page, mode } = parseUrlPath(rawUrl);
 
@@ -531,8 +580,7 @@ function handleRequest(
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify(snapshot));
     } catch (error) {
-      response.writeHead(500, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ error: String(error) }));
+      sendError(response, 500, 'Internal server error', String(error));
     }
     return;
   }
@@ -543,8 +591,7 @@ function handleRequest(
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify(analytics));
     } catch (error) {
-      response.writeHead(500, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ error: String(error) }));
+      sendError(response, 500, 'Internal server error', String(error));
     }
     return;
   }
@@ -787,7 +834,7 @@ function buildMenubarErrorHtml(message: string): string {
 <title>Token Tracker</title><style>${MENUBAR_STYLES}</style></head>
 <body>
   <div class="header"><span class="health-dot health-dot-critical"></span><span class="header-title">Token Tracker</span></div>
-  <p class="error">${escapeHtml(message)}</p>
+  <p class="error">An unexpected error occurred.</p>
   <a class="action-link" href="/">Open Dashboard</a>
 </body></html>`;
 }
@@ -810,7 +857,7 @@ function buildSessionMeter(sessionCount: number): string {
 }
 
 function buildMinimalProviderRows(summaries: SessionSummary[]): string {
-  return summaries.map((p) => {
+  return summaries.map((p: SessionSummary) => {
     const health = menubarProviderHealth(p);
     const costStr = p.totalCostUsd > 0 ? '$' + p.totalCostUsd.toFixed(2) : '$0';
     return '<div class="provider-row"><span class="provider-dot provider-dot-' + health + '"></span><span class="provider-name">' + escapeHtml(p.provider) + '</span><span class="provider-cost">' + costStr + '</span></div>';

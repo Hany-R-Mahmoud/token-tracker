@@ -1,4 +1,5 @@
 import { SCORE_VERSION } from './metrics.js';
+import { analyzeSuccess } from './success.js';
 import type {
   CanonicalSession,
   CanonicalSessionSeed,
@@ -49,6 +50,7 @@ export function enrichSession(seed: CanonicalSessionSeed): CanonicalSession {
     anomalyScore: null,
     loopCount,
     flags: buildFlags({ loopCount, outcome, cacheHitRate: seed.cache.hitRate }),
+    successAnalysis: analyzeSuccess(seed, outcome),
     explanation: {
       scoreVersion: SCORE_VERSION,
       outcomeReasons: [`Outcome inferred as ${outcome} from Codex event patterns.`],

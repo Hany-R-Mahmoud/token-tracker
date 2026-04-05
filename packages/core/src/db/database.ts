@@ -6,7 +6,6 @@ import type { CanonicalSession, ScoreFactor } from '../domain/session.js';
 import { SQLITE_SCHEMA_STATEMENTS } from './sqlite-schema.js';
 import type {
   DailyBucket,
-  ModelOption,
   ModelSummary,
   ProviderHealthRecord,
   SessionListFilters,
@@ -14,6 +13,8 @@ import type {
   SessionSummary,
   StoredSessionDetail,
   StoredSessionListItem,
+  ModelOption,
+  ScoreFactorRow,
 } from './types.js';
 
 export class TtmDatabase implements AdapterStorage {
@@ -97,6 +98,8 @@ export class TtmDatabase implements AdapterStorage {
         cost_total_usd, pricing_snapshot_id, cache_hit_rate, cache_eligible_tokens,
         outcome, outcome_confidence, task_category, task_category_confidence,
         efficiency_score, waste_score, anomaly_score, loop_count,
+        completion_state, verification_state, success_score, execution_quality_score,
+        rework_score, value_density_score, analysis_confidence, success_signals_json,
         reset_window_kind, reset_window_resets_at, reset_window_remaining_percent,
         score_version, parser_version, contains_sensitive_text, created_at, updated_at
       ) VALUES (
@@ -108,6 +111,8 @@ export class TtmDatabase implements AdapterStorage {
         @costTotalUsd, @pricingSnapshotId, @cacheHitRate, @cacheEligibleTokens,
         @outcome, @outcomeConfidence, @taskCategory, @taskCategoryConfidence,
         @efficiencyScore, @wasteScore, @anomalyScore, @loopCount,
+        @completionState, @verificationState, @successScore, @executionQualityScore,
+        @reworkScore, @valueDensityScore, @analysisConfidence, @successSignalsJson,
         @resetWindowKind, @resetWindowResetsAt, @resetWindowRemainingPercent,
         @scoreVersion, @parserVersion, @containsSensitiveText, @createdAt, @updatedAt
       )
@@ -148,6 +153,14 @@ export class TtmDatabase implements AdapterStorage {
         waste_score = excluded.waste_score,
         anomaly_score = excluded.anomaly_score,
         loop_count = excluded.loop_count,
+        completion_state = excluded.completion_state,
+        verification_state = excluded.verification_state,
+        success_score = excluded.success_score,
+        execution_quality_score = excluded.execution_quality_score,
+        rework_score = excluded.rework_score,
+        value_density_score = excluded.value_density_score,
+        analysis_confidence = excluded.analysis_confidence,
+        success_signals_json = excluded.success_signals_json,
         reset_window_kind = excluded.reset_window_kind,
         reset_window_resets_at = excluded.reset_window_resets_at,
         reset_window_remaining_percent = excluded.reset_window_remaining_percent,
@@ -158,6 +171,7 @@ export class TtmDatabase implements AdapterStorage {
     `);
 
     const now = new Date().toISOString();
+    const sa = session.successAnalysis;
     insertSession.run({
       anomalyScore: session.anomalyScore,
       attemptCount: session.attemptCount,
@@ -204,6 +218,15 @@ export class TtmDatabase implements AdapterStorage {
       updatedAt: now,
       wasteScore: session.wasteScore,
       createdAt: now,
+      // Success analysis fields
+      completionState: sa.completionState,
+      verificationState: sa.verificationState,
+      successScore: sa.successScore,
+      executionQualityScore: sa.executionQualityScore,
+      reworkScore: sa.reworkScore,
+      valueDensityScore: sa.valueDensityScore,
+      analysisConfidence: sa.analysisConfidence,
+      successSignalsJson: JSON.stringify(sa.successSignals),
     });
 
     this.replaceSessionFlags(session.id, session.flags);
@@ -227,7 +250,9 @@ export class TtmDatabase implements AdapterStorage {
         SUM(CASE WHEN pricing_snapshot_id IS NULL THEN 1 ELSE 0 END) AS unpricedSessions,
         MAX(reset_window_kind) AS resetWindowKind,
         MAX(reset_window_resets_at) AS resetWindowResetsAt,
-        MAX(reset_window_remaining_percent) AS resetWindowRemainingPercent
+        MAX(reset_window_remaining_percent) AS resetWindowRemainingPercent,
+        AVG(success_score) AS averageSuccessScore,
+        AVG(analysis_confidence) AS averageAnalysisConfidence
       FROM sessions
       GROUP BY provider
       ORDER BY totalTokens DESC
@@ -254,6 +279,11 @@ export class TtmDatabase implements AdapterStorage {
       values.push(filters.provider);
     }
 
+    if (filters.model) {
+      clauses.push('model = ?');
+      values.push(filters.model);
+    }
+
     if (filters.priced && !filters.unpriced) {
       clauses.push('pricing_snapshot_id IS NOT NULL');
     }
@@ -268,11 +298,12 @@ export class TtmDatabase implements AdapterStorage {
       values.push(pattern, pattern, pattern);
     }
 
-
     const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    const limit = normalizeListLimit(filters.limit);
+    const pageSize = Math.max(1, Math.min(100, filters.pageSize ?? 20));
+    const page = Math.max(1, filters.page ?? 1);
+    const offset = (page - 1) * pageSize;
 
-    return this.database.prepare(`
+    const rows = this.database.prepare(`
       SELECT
         id,
         provider,
@@ -284,12 +315,16 @@ export class TtmDatabase implements AdapterStorage {
         pricing_snapshot_id AS pricingSnapshotId,
         efficiency_score AS efficiencyScore,
         outcome,
-        title
-      FROM sessions
-      ${whereClause}
+        title,
+        completion_state AS completionState,
+        verification_state AS verificationState,
+        success_score AS successScore,
+        analysis_confidence AS analysisConfidence
       ORDER BY started_at DESC
-      LIMIT ?
-    `).all(...values, limit) as unknown as StoredSessionListItem[];
+      LIMIT ? OFFSET ?
+    `).all(...values, pageSize, offset) as unknown as StoredSessionListItem[];
+
+    return rows;
   }
 
   public listSessionsWithCount(filters: SessionListFilters = {}): SessionListResult {
@@ -301,6 +336,11 @@ export class TtmDatabase implements AdapterStorage {
       values.push(filters.provider);
     }
 
+    if (filters.model) {
+      clauses.push('model = ?');
+      values.push(filters.model);
+    }
+
     if (filters.priced && !filters.unpriced) {
       clauses.push('pricing_snapshot_id IS NOT NULL');
     }
@@ -315,24 +355,16 @@ export class TtmDatabase implements AdapterStorage {
       values.push(pattern, pattern, pattern);
     }
 
-    if (filters.model) {
-      clauses.push('model = ?');
-      values.push(filters.model);
-    }
-
     const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    const pageSize = 10;
+    const pageSize = Math.max(1, Math.min(100, filters.pageSize ?? 20));
     const page = Math.max(1, filters.page ?? 1);
+    const offset = (page - 1) * pageSize;
 
     const countRow = this.database.prepare(`
       SELECT COUNT(*) AS total FROM sessions ${whereClause}
     `).get(...values) as { total: number };
 
-    const totalPages = Math.max(1, Math.ceil(countRow.total / pageSize));
-    const clampedPage = Math.min(page, totalPages);
-    const offset = (clampedPage - 1) * pageSize;
-
-    const sessions = this.database.prepare(`
+    const rows = this.database.prepare(`
       SELECT
         id,
         provider,
@@ -344,17 +376,24 @@ export class TtmDatabase implements AdapterStorage {
         pricing_snapshot_id AS pricingSnapshotId,
         efficiency_score AS efficiencyScore,
         outcome,
-        title
+        title,
+        completion_state AS completionState,
+        verification_state AS verificationState,
+        success_score AS successScore,
+        analysis_confidence AS analysisConfidence
+        analysis_confidence AS analysisConfidence
       FROM sessions
       ${whereClause}
       ORDER BY started_at DESC
       LIMIT ? OFFSET ?
     `).all(...values, pageSize, offset) as unknown as StoredSessionListItem[];
 
+    const totalPages = Math.max(1, Math.ceil(countRow.total / pageSize));
+
     return {
-      sessions,
+      sessions: rows,
       total: countRow.total,
-      page: clampedPage,
+      page,
       pageSize,
       totalPages,
     };
@@ -392,11 +431,19 @@ export class TtmDatabase implements AdapterStorage {
         waste_score AS wasteScore,
         anomaly_score AS anomalyScore,
         loop_count AS loopCount,
-        title
+        title,
+        completion_state AS completionState,
+        verification_state AS verificationState,
+        success_score AS successScore,
+        analysis_confidence AS analysisConfidence,
+        execution_quality_score AS executionQualityScore,
+        rework_score AS reworkScore,
+        value_density_score AS valueDensityScore,
+        success_signals_json AS successSignalsJson
       FROM sessions
       WHERE id = ? OR provider_session_id = ?
       LIMIT 1
-    `).get(sessionId, sessionId) as StoredSessionDetail | undefined;
+    `).get(sessionId, sessionId) as (StoredSessionDetail & { successSignalsJson: string; executionQualityScore: number | null; reworkScore: number | null; valueDensityScore: number | null }) | undefined;
 
     if (!row) {
       return null;
@@ -422,11 +469,28 @@ export class TtmDatabase implements AdapterStorage {
       direction: 'positive' | 'negative' | 'neutral';
     }>;
 
+    let successSignals: Array<{ kind: string; direction: string; weight: number; confidence: number; label: string; evidence: string }> = [];
+    try {
+      successSignals = JSON.parse(row.successSignalsJson || '[]');
+    } catch {
+      // Ignore parse errors
+    }
+
     return {
       ...row,
       outcomeReasons: explanations ? parseStringArray(explanations.outcome_reasons_json) : [],
       wasteReasons: explanations ? parseStringArray(explanations.waste_reasons_json) : [],
       scoreFactors,
+      successAnalysis: {
+        completionState: row.completionState as 'completed' | 'partial' | 'abandoned' | 'reverted' | 'unknown',
+        verificationState: row.verificationState as 'verified' | 'probable' | 'contradicted' | 'missing',
+        successScore: row.successScore,
+        executionQualityScore: row.executionQualityScore,
+        reworkScore: row.reworkScore,
+        valueDensityScore: row.valueDensityScore,
+        analysisConfidence: row.analysisConfidence,
+        successSignals: successSignals as unknown as import('../domain/session.js').SuccessSignal[],
+      },
     };
   }
 
@@ -479,6 +543,25 @@ export class TtmDatabase implements AdapterStorage {
     return rows.map((row) => mapProviderHealthRow(row));
   }
 
+  public getModelOptions(): ModelOption[] {
+    const rows = this.database.prepare(`
+      SELECT
+        COALESCE(model, 'unknown') AS model,
+        COUNT(*) AS sessionCount
+      FROM sessions
+      GROUP BY model
+      ORDER BY sessionCount DESC
+    `).all() as Array<{
+      model: string;
+      sessionCount: number;
+    }>;
+
+    return rows.map((row) => ({
+      model: row.model,
+      sessionCount: row.sessionCount,
+    }));
+  }
+
   public getModelSummaries(): ModelSummary[] {
     const rows = this.database.prepare(`
       SELECT
@@ -490,7 +573,7 @@ export class TtmDatabase implements AdapterStorage {
         AVG(efficiency_score) AS averageEfficiency,
         SUM(CASE WHEN pricing_snapshot_id IS NOT NULL THEN 1 ELSE 0 END) AS pricedSessions
       FROM sessions
-      GROUP BY model
+      GROUP BY model, provider
       ORDER BY totalTokens DESC
     `).all() as unknown as ModelSummary[];
 
@@ -514,19 +597,6 @@ export class TtmDatabase implements AdapterStorage {
     return rows;
   }
 
-  public getModelOptions(): ModelOption[] {
-    const rows = this.database.prepare(`
-      SELECT
-        COALESCE(model, 'unknown') AS model,
-        COUNT(*) AS sessionCount
-      FROM sessions
-      WHERE model IS NOT NULL
-      GROUP BY model
-      ORDER BY sessionCount DESC
-    `).all() as unknown as ModelOption[];
-
-    return rows;
-  }
 
   public getSessionCountForWindow(days: number): number {
     const row = this.database.prepare(`
@@ -547,7 +617,12 @@ export class TtmDatabase implements AdapterStorage {
         COALESCE(SUM(cost_total_usd), 0) AS totalCostUsd,
         AVG(efficiency_score) AS averageEfficiency,
         SUM(CASE WHEN pricing_snapshot_id IS NOT NULL THEN 1 ELSE 0 END) AS pricedSessions,
-        SUM(CASE WHEN pricing_snapshot_id IS NULL THEN 1 ELSE 0 END) AS unpricedSessions
+        SUM(CASE WHEN pricing_snapshot_id IS NULL THEN 1 ELSE 0 END) AS unpricedSessions,
+        MAX(reset_window_kind) AS resetWindowKind,
+        MAX(reset_window_resets_at) AS resetWindowResetsAt,
+        MAX(reset_window_remaining_percent) AS resetWindowRemainingPercent,
+        AVG(success_score) AS averageSuccessScore,
+        AVG(analysis_confidence) AS averageAnalysisConfidence
       FROM sessions
       WHERE started_at >= date('now', ?)
       GROUP BY provider
@@ -569,7 +644,7 @@ export class TtmDatabase implements AdapterStorage {
         SUM(CASE WHEN pricing_snapshot_id IS NOT NULL THEN 1 ELSE 0 END) AS pricedSessions
       FROM sessions
       WHERE started_at >= date('now', ?)
-      GROUP BY model
+      GROUP BY model, provider
       ORDER BY totalTokens DESC
     `).all(`-${days} days`) as unknown as ModelSummary[];
 
@@ -589,14 +664,17 @@ export class TtmDatabase implements AdapterStorage {
         pricing_snapshot_id AS pricingSnapshotId,
         efficiency_score AS efficiencyScore,
         outcome,
-        title
+        title,
+        completion_state AS completionState,
+        verification_state AS verificationState,
+        success_score AS successScore,
+        analysis_confidence AS analysisConfidence
       FROM sessions
       WHERE started_at >= date('now', ?)
       ORDER BY started_at DESC
       LIMIT ?
     `).all(`-${days} days`, limit) as unknown as StoredSessionListItem[];
   }
-
   private replaceSessionFlags(sessionId: string, flags: string[]): void {
     this.database.prepare('DELETE FROM session_flags WHERE session_id = ?').run(sessionId);
     const insert = this.database.prepare(`
@@ -663,14 +741,6 @@ function parseIssues(issuesJson: string): string[] {
   } catch {
     return [];
   }
-}
-
-function normalizeListLimit(limit: number | undefined): number {
-  if (!Number.isFinite(limit) || limit === undefined) {
-    return 20;
-  }
-
-  return Math.max(1, Math.min(100, Math.trunc(limit)));
 }
 
 function parseStringArray(json: string): string[] {

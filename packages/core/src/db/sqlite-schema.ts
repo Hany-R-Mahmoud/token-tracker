@@ -116,3 +116,16 @@ export const SQLITE_SCHEMA_STATEMENTS = [
     ON sessions(last_activity_at DESC)`,
 ] as const;
 
+// Schema migration: add success analysis columns for Phase 009
+// These are applied separately because Node.js SQLite doesn't support
+// "ADD COLUMN IF NOT EXISTS" syntax
+export const SCHEMA_MIGRATIONS = [
+  `ALTER TABLE sessions ADD COLUMN completion_state TEXT NOT NULL DEFAULT 'unknown'`,
+  `ALTER TABLE sessions ADD COLUMN verification_state TEXT NOT NULL DEFAULT 'missing'`,
+  `ALTER TABLE sessions ADD COLUMN success_score INTEGER`,
+  `ALTER TABLE sessions ADD COLUMN execution_quality_score INTEGER`,
+  `ALTER TABLE sessions ADD COLUMN rework_score INTEGER`,
+  `ALTER TABLE sessions ADD COLUMN value_density_score INTEGER`,
+  `ALTER TABLE sessions ADD COLUMN analysis_confidence REAL`,
+  `ALTER TABLE sessions ADD COLUMN success_signals_json TEXT`,
+] as const;

@@ -1,3 +1,5 @@
+import type { SessionSuccessAnalysis } from '../domain/session.js';
+
 export interface SessionSummary {
   provider: string;
   sessions: number;
@@ -9,6 +11,8 @@ export interface SessionSummary {
   resetWindowKind: string | null;
   resetWindowResetsAt: string | null;
   resetWindowRemainingPercent: number | null;
+  averageSuccessScore: number | null;
+  averageAnalysisConfidence: number | null;
 }
 
 export interface SessionListFilters {
@@ -16,6 +20,7 @@ export interface SessionListFilters {
   model?: string;
   limit?: number;
   page?: number;
+  pageSize?: number;
   priced?: boolean;
   unpriced?: boolean;
   search?: string;
@@ -53,6 +58,10 @@ export interface StoredSessionListItem {
   efficiencyScore: number | null;
   outcome: string;
   title: string | null;
+  completionState: string;
+  verificationState: string;
+  successScore: number | null;
+  analysisConfidence: number | null;
 }
 
 export interface StoredSessionDetail extends StoredSessionListItem {
@@ -78,6 +87,7 @@ export interface StoredSessionDetail extends StoredSessionListItem {
   outcomeReasons: string[];
   wasteReasons: string[];
   scoreFactors: ScoreFactorRow[];
+  successAnalysis: SessionSuccessAnalysis;
 }
 
 export interface ProviderHealthRecord {

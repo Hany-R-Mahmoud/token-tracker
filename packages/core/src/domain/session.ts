@@ -7,6 +7,39 @@ export type SessionOutcome =
   | 'reverted'
   | 'unknown';
 
+export type CompletionState = 'completed' | 'partial' | 'abandoned' | 'reverted' | 'unknown';
+export type VerificationState = 'verified' | 'probable' | 'contradicted' | 'missing';
+
+export type SuccessSignalKind =
+  | 'provider_completion'
+  | 'verification_command'
+  | 'repo_change'
+  | 'repair_loop'
+  | 'error_burst'
+  | 'revert_indicator'
+  | 'cache_efficiency'
+  | 'human_stop';
+
+export interface SuccessSignal {
+  kind: SuccessSignalKind;
+  direction: 'positive' | 'negative' | 'neutral';
+  weight: number;
+  confidence: number;
+  label: string;
+  evidence: string;
+}
+
+export interface SessionSuccessAnalysis {
+  completionState: CompletionState;
+  verificationState: VerificationState;
+  successScore: number | null;
+  executionQualityScore: number | null;
+  reworkScore: number | null;
+  valueDensityScore: number | null;
+  analysisConfidence: number | null;
+  successSignals: SuccessSignal[];
+}
+
 export type TaskCategory =
   | 'bug_fix'
   | 'feature'
@@ -101,5 +134,5 @@ export interface CanonicalSession extends CanonicalSessionSeed {
   loopCount: number;
   flags: string[];
   explanation: SessionExplanation;
+  successAnalysis: SessionSuccessAnalysis;
 }
-
