@@ -97,8 +97,8 @@ node packages/cli/dist/index.js compare-snapshot \
 # development mode (builds + launches native wrapper with tray/menu bar)
 npm run dev --workspace @ttm/desktop-tauri
 
-# production bundle
-npm run build --workspace @ttm/desktop-tauri
+# production installer
+npm run desktop:installer
 
 # output artifacts:
 #   src-tauri/target/release/bundle/macos/Token Tracker.app

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -6,14 +8,11 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconEvent},
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Wry,
 };
-
-#[cfg(target_os = "macos")]
-use std::process::Command;
-
 static TRAY_COST_CENTS: AtomicU32 = AtomicU32::new(0);
 
 struct AppState {
     tray: Mutex<Option<TrayIcon<Wry>>>,
+    desktop_server: Mutex<Option<Child>>,
 }
 
 const DASHBOARD_WINDOW_LABEL: &str = "main";
@@ -456,6 +455,87 @@ fn focus_window(app: &AppHandle, label: &str) {
     }
 }
 
+fn desktop_runtime_dir(app: &AppHandle) -> tauri::Result<PathBuf> {
+    let resource_dir = app.path().resource_dir()?;
+    let direct_runtime = resource_dir.join("runtime");
+    if direct_runtime.exists() {
+        return Ok(direct_runtime);
+    }
+
+    let tauri_bundle_runtime = resource_dir.join("_up_").join("runtime");
+    if tauri_bundle_runtime.exists() {
+        return Ok(tauri_bundle_runtime);
+    }
+
+    Ok(direct_runtime)
+}
+
+fn desktop_server_is_ready() -> bool {
+    let request = ureq::get(DESKTOP_API_URL).timeout(Duration::from_millis(400));
+    request.call().is_ok()
+}
+
+fn wait_for_desktop_server_ready(timeout: Duration) -> bool {
+    let attempts = (timeout.as_millis() / 250).max(1) as usize;
+    for _ in 0..attempts {
+        if desktop_server_is_ready() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
+    desktop_server_is_ready()
+}
+
+fn ensure_desktop_server(app: &AppHandle) -> tauri::Result<bool> {
+    if desktop_server_is_ready() {
+        return Ok(true);
+    }
+
+    let Some(state) = app.try_state::<AppState>() else {
+        return Ok(false);
+    };
+
+    {
+        let Ok(mut server_guard) = state.desktop_server.lock() else {
+            log::warn!("Desktop server state lock was poisoned");
+            return Ok(false);
+        };
+
+        let needs_spawn = match server_guard.as_mut() {
+            Some(child) => child.try_wait().ok().flatten().is_some(),
+            None => true,
+        };
+
+        if needs_spawn {
+            let runtime_dir = desktop_runtime_dir(app)?;
+            let node_path = runtime_dir.join("bin/node");
+            let server_entry = runtime_dir.join("apps/desktop/dist/index.js");
+
+            if !node_path.exists() || !server_entry.exists() {
+                log::warn!(
+                    "Bundled desktop runtime is missing. node: {:?}, entry: {:?}",
+                    node_path,
+                    server_entry
+                );
+                *server_guard = None;
+                return Ok(false);
+            }
+
+            let child = Command::new(node_path)
+                .arg(server_entry)
+                .current_dir(&runtime_dir)
+                .env("TTM_DESKTOP_PORT", "3100")
+                .spawn()
+                .map_err(tauri::Error::from)?;
+
+            *server_guard = Some(child);
+        }
+    }
+
+    Ok(wait_for_desktop_server_ready(Duration::from_secs(8)))
+}
+
 #[cfg(target_os = "macos")]
 fn escape_applescript_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
@@ -479,11 +559,15 @@ fn show_native_notification(_title: &str, _body: &str) {}
 
 fn show_dashboard_window(app: &AppHandle) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(DASHBOARD_WINDOW_LABEL) {
-        window.navigate(
-            DASHBOARD_URL
-                .parse()
-                .expect("dashboard URL should be a valid constant"),
-        )?;
+        if ensure_desktop_server(app)? {
+            window.navigate(
+                DASHBOARD_URL
+                    .parse()
+                    .expect("dashboard URL should be a valid constant"),
+            )?;
+        } else {
+            log::warn!("Desktop server was not ready; leaving packaged fallback page visible");
+        }
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -492,6 +576,11 @@ fn show_dashboard_window(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn show_menubar_window(app: &AppHandle) -> tauri::Result<()> {
+    if !ensure_desktop_server(app)? {
+        log::warn!("Desktop server was not ready; skipping menu bar window creation");
+        return Ok(());
+    }
+
     if let Some(window) = app.get_webview_window(MENUBAR_WINDOW_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
@@ -678,6 +767,7 @@ pub fn run() {
 
             app.manage(AppState {
                 tray: Mutex::new(Some(tray)),
+                desktop_server: Mutex::new(None),
             });
 
             // Show dashboard window

@@ -6,3 +6,4 @@ dist/
 .ttm/
 .env
 .DS_Store
+apps/desktop-tauri/runtime/

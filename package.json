@@ -13,7 +13,9 @@
     "typecheck": "tsc -b packages/core packages/cli apps/desktop apps/web --pretty false",
     "desktop:start": "node apps/desktop/dist/index.js",
     "desktop:tauri:dev": "npm run dev --workspace=@ttm/desktop-tauri",
-    "desktop:tauri:build": "npm run build --workspace=@ttm/desktop-tauri"
+    "desktop:tauri:build": "npm run build --workspace=@ttm/desktop-tauri",
+    "desktop:installer": "bash ./scripts/build-macos-installer.sh",
+    "desktop:prepare-runtime": "bash ./scripts/prepare-desktop-runtime.sh"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
