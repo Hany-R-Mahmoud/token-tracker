@@ -1,73 +1,57 @@
-Implement Phase 009 from these files:
+Implement the Phase 009 revisit from these files:
 
-- `/Users/hanyramadan/token traker/docs/research/phase-009-success-analysis-research.md`
+- `/Users/hanyramadan/token traker/docs/research/phase-009-visual-analytics-revisit.md`
 - `/Users/hanyramadan/token traker/specs/009-success-analysis-and-representation/spec.md`
 - `/Users/hanyramadan/token traker/specs/009-success-analysis-and-representation/plan.md`
 - `/Users/hanyramadan/token traker/specs/009-success-analysis-and-representation/tasks.md`
 - `/Users/hanyramadan/token traker/specs/009-success-analysis-and-representation/quickstart.md`
+- `/Users/hanyramadan/token traker/specs/008-visual-system-and-brand-refresh/spec.md`
+- `/Users/hanyramadan/token traker/apps/desktop/src/index.ts`
+- `/Users/hanyramadan/token traker/apps/desktop/src/styles.ts`
+- `/Users/hanyramadan/token traker/apps/desktop/src/menubar.ts`
 
 Execution rules:
 
 1. Start with `agent-orchestrator`.
 2. Use:
+   - `agent-impeccable`
    - `agent-implementer`
    - `agent-tester`
    - `agent-reviewer`
    - `agent-docs`
    - `agent-debugging`
-3. Use `agent-security` only if local evidence collection or shared-surface
-   representation raises sensitive data-boundary concerns.
-4. Implement the shared analysis model first, then wire all surfaces.
-5. Keep adapters boring; keep scoring policy centralized in shared analysis code.
-6. Keep missing evidence honest and visible. Missing verification must not imply
-   failure.
-7. Do not expose raw git diff content, raw verification logs, or other private
-   local evidence in shared surfaces.
+3. Use `agent-security` only if any new visual/interaction flow changes trust
+   boundaries, sharing, auth, or external-link behavior.
+4. Do not redesign from scratch in a vacuum. Build on the actual data and truth
+   layers already in the repo.
+5. Do not ship generic SaaS cards or a purple-on-dark AI dashboard.
+6. Preserve honest fallback, degraded, heuristic, and unknown states visually.
+7. Keep implementation realistic for the current stack. No framework rewrite.
 
 Implementation goals:
 
-- extend the canonical session model with:
-  - `completionState`
-  - `verificationState`
-  - `successScore`
-  - `executionQualityScore`
-  - `reworkScore`
-  - `valueDensityScore`
-  - `analysisConfidence`
-  - `successSignals`
-- add a typed success-signal model
-- create a shared evidence subsystem that derives signals from:
-  - provider-native completion metadata
-  - optional local repo / git evidence
-  - optional verification-command evidence
-  - retries, loops, errors, contradiction indicators
-- preserve backward compatibility for:
-  - `efficiencyScore`
-  - `wasteScore`
-  - `outcome`
-  - `outcomeConfidence`
-- update all surfaces in one phase:
-  - CLI
-  - desktop overview
-  - analytics
-  - menubar
-  - leaderboard
+- redesign Overview into a monitoring-first decision cockpit
+- redesign Analytics into a comparison-first and trend-rich analysis surface
+- align Menubar visual language with the desktop product
+- introduce a coherent palette, typography direction, and state system
+- define and integrate a logo/app-icon/tray-icon direction
+- improve KPI cards so numbers include trend or comparison context
+- add richer, modern visualizations where they help understanding
+- preserve accessibility, responsiveness, and honesty
 
-Validation requirements:
+Required output:
 
-- add unit tests for score composition
-- add tests for evidence collection levels and contradiction handling
-- verify old routes still render without crashes
-- verify no shared surface leaks private local evidence
-- verify docs stay honest about probable vs verified outcomes
-
-Final report must include:
-
-1. Summary of implemented analysis-model changes
-2. Files changed
+1. Files changed
+2. Summary of the chosen visual direction
 3. Validation commands and results
-4. Quickstart checklist with PASS / FAIL / PARTIAL
-5. Remaining limitations with evidence only
+4. Screens or sections redesigned
+5. Remaining limitations
+
+If design generation is needed first:
+
+- produce the exact Stitch or Gemini prompt before implementation starts
+- ask for at least 2 materially different directions
+- prefer one bold direction and one cleaner editorial direction
 
 Exact execution command:
 

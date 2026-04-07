@@ -39,61 +39,119 @@ interface AppConfig {
 
 const STYLES = `
   * { box-sizing: border-box; }
-  body { font-family: system-ui, -apple-system, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px 16px; color: #111827; background: #f9fafb; }
-  .nav { background: #111827; padding: 10px 16px; margin: -20px -16px 24px; display: flex; align-items: center; gap: 16px; }
-  .nav-brand { color: #fff; font-weight: 600; font-size: 14px; margin-right: auto; }
-  .nav a { color: #d1d5db; text-decoration: none; font-size: 13px; padding: 4px 8px; border-radius: 4px; }
-  .nav a:hover, .nav a.active { color: #fff; background: rgba(255,255,255,0.1); }
-  h1 { margin-bottom: 4px; font-size: 22px; }
-  .subtitle { color: #6b7280; margin-bottom: 20px; font-size: 13px; }
-  .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-  .card h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
-  .btn { display: inline-block; padding: 8px 16px; background: #2563eb; color: #fff; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; text-decoration: none; }
-  .btn:hover { background: #1d4ed8; text-decoration: none; }
-  .btn-secondary { background: #6b7280; }
-  .btn-secondary:hover { background: #4b5563; }
-  .btn-danger { background: #ef4444; }
-  .btn-danger:hover { background: #dc2626; }
-  .opt-in-card { border-left: 4px solid #22c55e; }
-  .opt-out-card { border-left: 4px solid #ef4444; }
-  .privacy-list { margin: 8px 0; padding-left: 20px; font-size: 13px; color: #6b7280; }
+  :root {
+    --bg: #0b1326;
+    --bg-panel: #171f33;
+    --bg-panel-strong: #131b2e;
+    --text: #dae2fd;
+    --text-secondary: #bac9cc;
+    --text-muted: #849396;
+    --border: #2d3449;
+    --border-strong: #3b494c;
+    --accent: #a3ffd9;
+    --accent-strong: #36ffc4;
+    --accent-soft: rgba(163, 255, 217, 0.12);
+    --critical: #b01522;
+    --critical-soft: rgba(176, 21, 34, 0.14);
+    --success-soft: rgba(54, 255, 196, 0.12);
+  }
+  body {
+    font-family: "Manrope", "Instrument Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+    max-width: 1060px;
+    margin: 0 auto;
+    padding: 0 18px 32px;
+    color: var(--text);
+    background:
+      radial-gradient(circle at top right, rgba(163, 255, 217, 0.08), transparent 32%),
+      var(--bg);
+  }
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: rgba(6, 14, 32, 0.92);
+    backdrop-filter: blur(18px);
+    padding: 12px 18px;
+    margin: 0 -18px 28px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-brand { margin-right: auto; }
+  .brand-lockup { display: inline-flex; align-items: center; gap: 10px; }
+  .brand-mark { width: 18px; height: 18px; color: var(--accent); flex-shrink: 0; }
+  .brand-wordmark { color: var(--accent); font-family: "Space Grotesk", "Instrument Sans", sans-serif; font-style: italic; font-weight: 800; letter-spacing: -0.04em; text-transform: uppercase; }
+  .nav a { color: var(--text-muted); text-decoration: none; font-size: 11px; padding: 6px 10px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.14em; font-weight: 700; }
+  .nav a:hover, .nav a.active { color: var(--text); background: var(--accent-soft); }
+  h1 { margin: 0 0 6px; font-family: "Space Grotesk", "Instrument Sans", sans-serif; font-size: clamp(28px, 5vw, 44px); line-height: 0.95; letter-spacing: -0.05em; text-transform: uppercase; }
+  .subtitle { color: var(--text-secondary); margin-bottom: 22px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.14em; }
+  .card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)), var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+  .card h2 { font-family: "Space Grotesk", "Instrument Sans", sans-serif; font-size: 16px; font-weight: 700; margin: 0 0 14px; letter-spacing: -0.03em; }
+  .btn { display: inline-block; padding: 9px 16px; background: var(--accent); color: #003828; border: 1px solid rgba(163,255,217,0.3); border-radius: 4px; font-size: 11px; cursor: pointer; text-decoration: none; text-transform: uppercase; letter-spacing: 0.12em; font-weight: 700; }
+  .btn:hover { background: var(--accent-strong); text-decoration: none; }
+  .btn-secondary { background: var(--accent-soft); color: var(--text); }
+  .btn-secondary:hover { background: rgba(163,255,217,0.2); }
+  .btn-danger { background: var(--critical-soft); color: #ffc1bd; border-color: rgba(176,21,34,0.32); }
+  .btn-danger:hover { background: rgba(176,21,34,0.22); }
+  .opt-in-card { border-left: 3px solid var(--accent); }
+  .opt-out-card { border-left: 3px solid var(--critical); }
+  .privacy-list { margin: 8px 0; padding-left: 20px; font-size: 13px; color: var(--text-secondary); }
   .privacy-list li { margin-bottom: 4px; }
-  .status-badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 500; }
-  .status-connected { background: #dcfce7; color: #166534; }
-  .status-disconnected { background: #f3f4f6; color: #6b7280; }
-  .status-opted-in { background: #dcfce7; color: #166534; }
-  .status-opted-out { background: #fef3c7; color: #92400e; }
-  .empty { color: #6b7280; font-size: 13px; text-align: center; padding: 24px 0; }
-  .error { color: #b91c1c; }
-  a { color: #2563eb; text-decoration: none; }
+  .status-badge { display: inline-block; padding: 3px 8px; border-radius: 9999px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; }
+  .status-connected, .status-opted-in { background: var(--success-soft); color: var(--accent); }
+  .status-disconnected { background: rgba(185, 200, 222, 0.14); color: var(--text-secondary); }
+  .status-opted-out { background: var(--critical-soft); color: #ffc1bd; }
+  .empty { color: var(--text-secondary); font-size: 13px; text-align: center; padding: 24px 0; }
+  .error { color: #ffc1bd; }
+  a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #f3f4f6; font-size: 13px; }
-  th { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; background: #f9fafb; }
-  .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f3f4f6; }
-  .detail-label { font-size: 13px; color: #6b7280; }
-  .detail-value { font-size: 13px; font-weight: 500; color: #111827; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(59,73,76,0.4); font-size: 13px; }
+  th { font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.12em; font-weight: 700; background: var(--bg-panel-strong); }
+  .detail-row { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid rgba(59,73,76,0.4); }
+  .detail-label { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.12em; }
+  .detail-value { font-size: 13px; font-weight: 600; color: var(--text); }
   .drawer-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.3); z-index: 100; display: none; }
   .drawer-overlay.open { display: block; }
-  .drawer-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 360px; max-width: 90vw; background: #fff; box-shadow: -4px 0 20px rgba(0,0,0,0.1); z-index: 101; padding: 24px; overflow-y: auto; display: none; }
+  .drawer-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 360px; max-width: 90vw; background: var(--bg-panel); box-shadow: -4px 0 20px rgba(0,0,0,0.24); z-index: 101; padding: 24px; overflow-y: auto; display: none; border-left: 1px solid var(--border); }
   .drawer-panel.open { display: block; }
-  .drawer-close { position: absolute; top: 16px; right: 16px; background: none; border: none; font-size: 20px; cursor: pointer; color: #6b7280; }
-  .drawer-close:hover { color: #111827; }
+  .drawer-close { position: absolute; top: 16px; right: 16px; background: none; border: none; font-size: 20px; cursor: pointer; color: var(--text-secondary); }
+  .drawer-close:hover { color: var(--text); }
   .leaderboard-row { cursor: pointer; }
-  .leaderboard-row:hover { background: #f9fafb; }
-  .leaderboard-row:focus { outline: 2px solid #2563eb; outline-offset: -2px; }  .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f3f4f6; }
-  .detail-label { font-size: 13px; color: #6b7280; }
-  .detail-value { font-size: 13px; font-weight: 500; color: #111827; }
-  .drawer-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.3); z-index: 100; display: none; }
-  .drawer-overlay.open { display: block; }
-  .drawer-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 360px; max-width: 90vw; background: #fff; box-shadow: -4px 0 20px rgba(0,0,0,0.1); z-index: 101; padding: 24px; overflow-y: auto; display: none; }
-  .drawer-panel.open { display: block; }
-  .drawer-close { position: absolute; top: 16px; right: 16px; background: none; border: none; font-size: 20px; cursor: pointer; color: #6b7280; }
-  .drawer-close:hover { color: #111827; }
-  .leaderboard-row { cursor: pointer; }
-  .leaderboard-row:hover { background: #f9fafb; }
-  .leaderboard-row:focus { outline: 2px solid #2563eb; outline-offset: -2px; }
+  .leaderboard-row:hover { background: rgba(163,255,217,0.06); }
+  .leaderboard-row:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+  code, pre { font-family: "Geist Mono", "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; }
 `;
+
+function buildBrandLockup(label = 'Token Tracker'): string {
+  return `<span class="brand-lockup">
+    <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+      <g fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter">
+        <path d="M32 8 52 28 32 48 12 28 32 8Z"></path>
+        <path d="M20 24H44"></path>
+        <path d="M17 32H47"></path>
+        <path d="M24 40H40"></path>
+      </g>
+    </svg>
+    <span class="brand-wordmark">${escapeHtml(label)}</span>
+  </span>`;
+}
+
+function buildWebNav(active: 'home' | 'settings' | 'leaderboard'): string {
+  return `<nav class="nav">
+    <span class="nav-brand">${buildBrandLockup('Token Tracker')}</span>
+    <a href="/"${active === 'home' ? ' class="active"' : ''}>Home</a>
+    <a href="/settings"${active === 'settings' ? ' class="active"' : ''}>Settings</a>
+    <a href="/leaderboard"${active === 'leaderboard' ? ' class="active"' : ''}>Leaderboard</a>
+  </nav>`;
+}
 
 function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;').replace(/`/g, '&#x60;');
@@ -381,12 +439,7 @@ function buildHomePage(db: LeaderboardDatabase, githubUser: { githubId: number; 
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — Team Leaderboard</title><style>${STYLES}</style></head>
 <body>
-  <nav class="nav">
-    <span class="nav-brand">Token Tracker — Team</span>
-    <a href="/" class="active">Home</a>
-    <a href="/settings">Settings</a>
-    <a href="/leaderboard">Leaderboard</a>
-  </nav>
+  ${buildWebNav('home')}
   <h1>Team Leaderboard</h1>
   <p class="subtitle">Private, team-scoped, efficiency-oriented ranking. Not a public leaderboard.</p>
 
@@ -404,22 +457,22 @@ function buildHomePage(db: LeaderboardDatabase, githubUser: { githubId: number; 
       ? '<p class="empty">Connect GitHub first to manage leaderboard visibility.</p>'
       : isOptedIn
         ? `<p>You are <strong>visible</strong> on the team leaderboard. <span class="status-badge status-opted-in">Opted In</span></p>
-           <p style="font-size:12px;color:#6b7280;margin-top:8px">Your aggregated efficiency stats are visible to teammates. Raw session data, prompts, and code are never shared.</p>
+           <p style="font-size:12px;color:var(--text-secondary);margin-top:8px">Your aggregated efficiency stats are visible to teammates. Raw session data, prompts, and code are never shared.</p>
            <form method="post" action="/settings/opt-out" style="margin-top:12px"><button type="submit" class="btn btn-secondary">Opt Out</button></form>`
         : `<p>You are <strong>not visible</strong> on the team leaderboard. <span class="status-badge status-opted-out">Opted Out</span></p>
-           <p style="font-size:12px;color:#6b7280;margin-top:8px">Opt in to appear on the leaderboard with your aggregated efficiency stats.</p>
+           <p style="font-size:12px;color:var(--text-secondary);margin-top:8px">Opt in to appear on the leaderboard with your aggregated efficiency stats.</p>
            <form method="post" action="/settings/opt-in" style="margin-top:12px"><button type="submit" class="btn">Opt In</button></form>`
     }
   </div>
 
   <div class="card">
     <h2>Privacy Policy</h2>
-    <p style="font-size:12px;color:#6b7280;margin-bottom:8px">Version ${escapeHtml(TTM_PRIVACY_POLICY.version)}</p>
+    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Version ${escapeHtml(TTM_PRIVACY_POLICY.version)}</p>
     <h3 style="font-size:13px;font-weight:600;margin:8px 0 4px">What is shared when you opt in:</h3>
     <ul class="privacy-list">${TTM_PRIVACY_POLICY.sharedData.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
     <h3 style="font-size:13px;font-weight:600;margin:8px 0 4px">What is NEVER shared:</h3>
     <ul class="privacy-list">${TTM_PRIVACY_POLICY.neverSharedData.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
-    <p style="font-size:12px;color:#6b7280;margin-top:8px">Admins cannot override your visibility choice.</p>
+    <p style="font-size:12px;color:var(--text-secondary);margin-top:8px">Admins cannot override your visibility choice.</p>
   </div>
 </body></html>`;
 }
@@ -430,12 +483,7 @@ function buildSettingsPage(db: LeaderboardDatabase, githubUser: { username: stri
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — Settings</title><style>${STYLES}</style></head>
 <body>
-  <nav class="nav">
-    <span class="nav-brand">Token Tracker — Team</span>
-    <a href="/">Home</a>
-    <a href="/settings" class="active">Settings</a>
-    <a href="/leaderboard">Leaderboard</a>
-  </nav>
+  ${buildWebNav('settings')}
   <h1>Settings</h1>
   <p class="subtitle">Manage your GitHub connection and leaderboard preferences.</p>
 
@@ -486,13 +534,13 @@ function buildLeaderboardPage(db: LeaderboardDatabase, teamId: string, githubId:
   // My Rank card
   let myRankCard = '';
   if (myRank) {
-    myRankCard = `<div class="card" style="border-left:4px solid #2563eb">
+    myRankCard = `<div class="card" style="border-left:4px solid var(--accent)">
       <h2>My Rank</h2>
-      <p style="font-size:24px;font-weight:700">#${myRank.rank} <span style="font-size:14px;color:#6b7280">of ${myRank.totalMembers}</span></p>
-      <p style="font-size:12px;color:#6b7280">You are visible on the leaderboard. <a href="/settings">Manage visibility</a></p>
+      <p style="font-size:24px;font-weight:700">#${myRank.rank} <span style="font-size:14px;color:var(--text-secondary)">of ${myRank.totalMembers}</span></p>
+      <p style="font-size:12px;color:var(--text-secondary)">You are visible on the leaderboard. <a href="/settings">Manage visibility</a></p>
     </div>`;
   } else if (currentMembership?.optedIn) {
-    myRankCard = `<div class="card" style="border-left:4px solid #f59e0b">
+    myRankCard = `<div class="card" style="border-left:4px solid var(--critical)">
       <h2>My Rank</h2>
       <p class="empty">Not enough sessions to appear on the leaderboard. Minimum ${MINIMUM_PARTICIPATION_THRESHOLD} sessions required.</p>
     </div>`;
@@ -507,7 +555,7 @@ function buildLeaderboardPage(db: LeaderboardDatabase, teamId: string, githubId:
   const periodTabs = `<div style="display:flex;gap:8px;margin-bottom:16px">
     ${periods.map((p) => {
       const isActive = p.key === period;
-      const cls = isActive ? 'status-badge" style="background:#2563eb;color:#fff' : 'status-badge" style="background:#f3f4f6;color:#6b7280';
+      const cls = isActive ? 'status-badge" style="background:var(--accent);color:#003828' : 'status-badge" style="background:var(--bg-panel-strong);color:var(--text-secondary)';
       return `<a href="/leaderboard?period=${p.key}" class="${cls}">${p.label}</a>`;
     }).join('')}
   </div>`;
@@ -533,7 +581,7 @@ function buildLeaderboardPage(db: LeaderboardDatabase, teamId: string, githubId:
         const successRate = e.outcomeSuccessRate !== null ? `${(e.outcomeSuccessRate * 100).toFixed(0)}%` : '—';
         const cacheRate = e.averageCacheHitRate !== null ? `${(e.averageCacheHitRate * 100).toFixed(0)}%` : '—';
         const isCurrentUser = e.githubId === githubId;
-        const rowStyle = isCurrentUser ? 'style="background:#eff6ff"' : '';
+        const rowStyle = isCurrentUser ? 'style="background:rgba(163,255,217,0.08)"' : '';
         const memberData = encodeMemberPayload({
           displayName: e.displayName ?? e.username,
           username: e.username,
@@ -569,12 +617,7 @@ function buildLeaderboardPage(db: LeaderboardDatabase, teamId: string, githubId:
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — Leaderboard</title><style>${STYLES}</style></head>
 <body>
-  <nav class="nav">
-    <span class="nav-brand">Token Tracker — Team</span>
-    <a href="/">Home</a>
-    <a href="/settings">Settings</a>
-    <a href="/leaderboard" class="active">Leaderboard</a>
-  </nav>
+  ${buildWebNav('leaderboard')}
   <h1>Team Leaderboard</h1>
   <p class="subtitle">${team ? escapeHtml(team.teamName) : 'Team'} · ${members.length} opted-in member${members.length !== 1 ? 's' : ''}${snapshot ? ` · Last updated: ${escapeHtml(snapshot.computedAt)}` : ''}</p>
 
@@ -590,8 +633,8 @@ function buildLeaderboardPage(db: LeaderboardDatabase, teamId: string, githubId:
 
   <div class="card">
     <h2>About This Leaderboard</h2>
-    <p style="font-size:13px;color:#6b7280">This leaderboard ranks team members by <strong>efficiency score</strong>, not by raw token consumption. Higher efficiency means better outcomes with less waste. It considers: outcome success rate (15%), cache utilization (20%), waste penalty (25%), efficiency (35%), and participation bonus (5%).</p>
-    <p style="font-size:12px;color:#6b7280;margin-top:8px">Only opted-in members with ${MINIMUM_PARTICIPATION_THRESHOLD}+ sessions appear. Raw session data, prompts, and code are never shared. Admins cannot override visibility choices. Click a row or press Enter to view member details.</p>
+    <p style="font-size:13px;color:var(--text-secondary)">This leaderboard ranks team members by <strong>efficiency score</strong>, not by raw token consumption. Higher efficiency means better outcomes with less waste. It considers: outcome success rate (15%), cache utilization (20%), waste penalty (25%), efficiency (35%), and participation bonus (5%).</p>
+    <p style="font-size:12px;color:var(--text-secondary);margin-top:8px">Only opted-in members with ${MINIMUM_PARTICIPATION_THRESHOLD}+ sessions appear. Raw session data, prompts, and code are never shared. Admins cannot override visibility choices. Click a row or press Enter to view member details.</p>
   </div>
 
   <!-- Member Detail Drawer -->
@@ -750,7 +793,7 @@ export function createApp(
     if (path === '/auth/github') {
       if (!githubClientId || !githubClientSecret || !githubOAuthClient) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`<!DOCTYPE html><html><head><style>${STYLES}</style></head><body><nav class="nav"><span class="nav-brand">Token Tracker — Team</span><a href="/">Home</a></nav><h1>GitHub OAuth Not Configured</h1><p class="subtitle">Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment variables to enable GitHub OAuth.</p><div class="card"><h2>Development Mode</h2><p>In development, you can simulate a GitHub connection by setting a cookie:</p><pre style="background:#f3f4f6;padding:12px;border-radius:4px;font-size:12px">curl -b "github_id=12345" http://localhost:${PORT}/</pre></div></body></html>`);
+        res.end(`<!DOCTYPE html><html><head><style>${STYLES}</style></head><body>${buildWebNav('home')}<h1>GitHub OAuth Not Configured</h1><p class="subtitle">Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment variables to enable GitHub OAuth.</p><div class="card"><h2>Development Mode</h2><p>In development, you can simulate a GitHub connection by setting a cookie:</p><pre style="background:var(--bg-panel-strong);padding:12px;border-radius:4px;font-size:12px;border:1px solid var(--border)">curl -b "github_id=12345" http://localhost:${PORT}/</pre></div></body></html>`);
         return;
       }
 

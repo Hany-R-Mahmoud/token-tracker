@@ -1,7 +1,10 @@
 import type { ReadSummarySnapshot, SessionSummary, StoredSessionListItem } from '@ttm/core';
 import type { ContextPressureState } from '@ttm/core';
+import type { WindowContextSignal, ContextThresholdBand, ContextSignalColor, MatchConfidence, ResolutionTier, ActiveSurfaceResolution } from '@ttm/core';
+import { bandLabel, bandToColor, tierLabel, tierDescription, isFallbackState, isStrongTruth } from '@ttm/core';
 import { MENUBAR_STYLES } from './styles.js';
 import { escapeHtml, formatNumber, buildCountdownStr, menubarRelativeTime, menubarProviderHealth, menubarOverallHealth } from './helpers.js';
+import { buildBrandLockup } from './brand.js';
 
 const WEB_APP_URL = process.env.TTM_WEB_URL ?? 'http://localhost:3200';
 
@@ -10,17 +13,27 @@ function buildMenubarThemeScript(): string {
     (function() {
       try {
         var savedTheme = localStorage.getItem('ttm-theme');
-        if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+        document.documentElement.setAttribute('data-theme', savedTheme || 'dark');
       } catch (_) {}
     })();
   </script>`;
 }
 
-export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: StoredSessionListItem[], compactMode: 'detailed' | 'minimal' = 'detailed', myRank: { rank: number; totalMembers: number } | null = null, contextPressure: { low: number; medium: number; high: number; critical: number; unknown: number } | null = null): string {
+function buildMenubarMicroBars(sessions: StoredSessionListItem[]): string {
+  const values = sessions.slice(0, 8).reverse().map((session) => session.costTotalUsd > 0 ? session.costTotalUsd : session.tokenTotal / 50000);
+  const maxValue = Math.max(...values, 1);
+  return `<div class="mb-mini-bars">${values.map((value) => {
+    const height = Math.max(18, (value / maxValue) * 100);
+    return `<span class="mb-mini-bar" style="height:${height}%"></span>`;
+  }).join('')}</div>`;
+}
+
+export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: StoredSessionListItem[], compactMode: 'detailed' | 'minimal' = 'detailed', myRank: { rank: number; totalMembers: number } | null = null, contextPressure: { low: number; medium: number; high: number; critical: number; unknown: number } | null = null, windowContextSignal: WindowContextSignal | null = null, activeSurfaceResolution: ActiveSurfaceResolution | null = null): string {
   const totalCost = snapshot.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalCostUsd, 0);
   const totalSessions = snapshot.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.sessions, 0);
   const totalTokens = snapshot.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalTokens, 0);
   const overallHealth = menubarOverallHealth(snapshot.providerSummaries);
+  const heroMicroBars = buildMenubarMicroBars(recentSessions);
 
   // Effectiveness summary
   const providersWithEff = snapshot.providerSummaries.filter((p: SessionSummary) => p.averageEfficiency !== null);
@@ -76,7 +89,7 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
   const maxProviderCost = Math.max(...snapshot.providerSummaries.map((p: SessionSummary) => p.totalCostUsd), 0.01);
   const providerBars = snapshot.providerSummaries.map((p: SessionSummary) => {
     const width = Math.max(4, (p.totalCostUsd / maxProviderCost) * 100);
-    return `<div class="mb-provider-bar"><span class="mb-provider-bar-name">${escapeHtml(p.provider)}</span><div class="mb-provider-bar-track"><div class="mb-provider-bar-fill" style="width:${width}%;background:#2563eb"></div></div><span class="mb-provider-bar-cost">$${p.totalCostUsd.toFixed(2)}</span></div>`;
+    return `<div class="mb-provider-bar"><span class="mb-provider-bar-name">${escapeHtml(p.provider)}</span><div class="mb-provider-bar-track"><div class="mb-provider-bar-fill" style="width:${width}%;background:${p.averageSuccessScore !== null && p.averageSuccessScore < 40 ? 'var(--mb-critical)' : 'var(--mb-accent)'}"></div></div><span class="mb-provider-bar-cost">$${p.totalCostUsd.toFixed(2)}</span></div>`;
   }).join('\n');
 
   // Provider status rows with reset
@@ -128,7 +141,7 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
 <body>
   <div class="mb-header">
     <span class="mb-health-dot mb-health-dot-warn"></span>
-    <span class="mb-title">Token Tracker</span>
+    <span class="mb-title">${buildBrandLockup('Token Tracker', true)}</span>
   </div>
   <div class="mb-empty">
     <div class="mb-empty-icon">📊</div>
@@ -151,7 +164,7 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
   <!-- 1. Header -->
   <div class="mb-header">
     <span class="mb-health-dot mb-health-dot-${overallHealth}" title="${overallHealth === 'healthy' ? 'All systems healthy' : overallHealth === 'warn' ? 'Attention needed' : 'Critical issue'}" role="status" aria-label="Health: ${overallHealth}"></span>
-    <span class="mb-title">Token Tracker</span>
+    <span class="mb-title">${buildBrandLockup('Token Tracker', true)}</span>
     ${compactMode === 'detailed' ? '<span class="mb-mode-toggle" id="mode-toggle" title="Toggle compact mode">▤</span>' : ''}
   </div>
 
@@ -162,9 +175,12 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
       <span>${totalSessions} sessions</span>
       <span>${formatNumber(totalTokens)} tokens</span>
     </div>
+    ${heroMicroBars}
     <span class="mb-effectiveness ${effClass}">${effLabel}${successRate !== null ? ` · ${(successRate * 100).toFixed(0)}% success` : ''}</span>
     ${successCueHtml}
     ${contextCueHtml}
+    ${windowContextSignal ? buildWindowContextSignalHtml(windowContextSignal) : ''}
+    ${activeSurfaceResolution ? buildActiveSurfaceResolutionHtml(activeSurfaceResolution) : ''}
   </div>
 
   ${compactMode === 'detailed' ? `
@@ -225,4 +241,48 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
     })();
   </script>` : ''}
 </body></html>`;
+}
+
+function buildWindowContextSignalHtml(signal: WindowContextSignal): string {
+  const color = signal.color;
+  const bgColor = color === 'red' ? 'var(--mb-critical-bg)' : color === 'yellow' ? 'var(--mb-warning-bg)' : color === 'green' ? 'var(--mb-success-bg)' : 'var(--mb-bg-secondary)';
+  const textColor = color === 'red' ? 'var(--mb-critical-text)' : color === 'yellow' ? 'var(--mb-warning-text)' : color === 'green' ? 'var(--mb-success-text)' : 'var(--mb-text-secondary)';
+  const usage = signal.contextUsagePercent !== null ? `${signal.contextUsagePercent.toFixed(1)}%` : 'n/a';
+  const providerLabel = signal.key.provider.charAt(0).toUpperCase() + signal.key.provider.slice(1);
+  const confidenceLabel = signal.resolutionConfidence === 'high' ? 'high' : signal.resolutionConfidence === 'medium' ? 'medium' : signal.resolutionConfidence === 'low' ? 'low' : 'none';
+  
+  return `<span class="mb-context-signal" style="background:${bgColor};color:${textColor}" title="${providerLabel}: ${usage} (${signal.thresholdBand}) · conf: ${confidenceLabel}">${providerLabel} ${usage}</span>`;
+}
+
+function buildActiveSurfaceResolutionHtml(resolution: ActiveSurfaceResolution): string {
+  const isFallback = isFallbackState(resolution.resolutionTier);
+  const isStrong = isStrongTruth(resolution.resolutionTier);
+  const tierText = tierLabel(resolution.resolutionTier);
+  const tierDesc = tierDescription(resolution.resolutionTier);
+  
+  let bgColor: string;
+  let textColor: string;
+  
+  if (isFallback) {
+    bgColor = 'var(--mb-warning-bg)';
+    textColor = 'var(--mb-warning-text)';
+  } else if (isStrong) {
+    bgColor = 'var(--mb-success-bg)';
+    textColor = 'var(--mb-success-text)';
+  } else {
+    bgColor = 'var(--mb-bg-secondary)';
+    textColor = 'var(--mb-text-secondary)';
+  }
+  
+  const providerLabel = resolution.provider 
+    ? resolution.provider.charAt(0).toUpperCase() + resolution.provider.slice(1)
+    : 'No provider';
+  
+  const stateClass = isFallback
+    ? ' mb-active-surface-fallback'
+    : isStrong
+      ? ' mb-active-surface-strong'
+      : '';
+
+  return `<span class="mb-active-surface${stateClass}" style="background:${bgColor};color:${textColor}" title="${escapeHtml(tierDesc)} · source: ${resolution.source}">${providerLabel}: ${escapeHtml(tierText)}</span>`;
 }

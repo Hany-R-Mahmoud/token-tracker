@@ -7,6 +7,9 @@ use tauri::{
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Wry,
 };
 
+#[cfg(target_os = "macos")]
+use std::process::Command;
+
 static TRAY_COST_CENTS: AtomicU32 = AtomicU32::new(0);
 
 struct AppState {
@@ -18,9 +21,432 @@ const MENUBAR_WINDOW_LABEL: &str = "menubar";
 const DASHBOARD_URL: &str = "http://localhost:3100/";
 const MENUBAR_URL: &str = "http://localhost:3100/menubar";
 const DESKTOP_API_URL: &str = "http://localhost:3100/api/summary";
+const DESKTOP_NOTIFICATION_API_URL: &str = "http://localhost:3100/api/notification-check";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ExternalWindowInfo {
+    pub external_window_id: String,
+    pub title: Option<String>,
+    pub app_name: Option<String>,
+    pub process_id: Option<u32>,
+    pub process_path: Option<String>,
+    pub bounds: Option<WindowBounds>,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WindowBounds {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ActiveSurfaceCapabilities {
+    pub active_window_detection: String,
+    pub open_window_registry: String,
+    pub browser_url_enrichment: String,
+    pub browser_native_messaging: String,
+    pub desktop_notifications: String,
+    pub attention_request: String,
+}
+
+impl Default for ActiveSurfaceCapabilities {
+    fn default() -> Self {
+        ActiveSurfaceCapabilities {
+            active_window_detection: "unavailable".to_string(),
+            open_window_registry: "unavailable".to_string(),
+            browser_url_enrichment: "unavailable".to_string(),
+            browser_native_messaging: "unavailable".to_string(),
+            desktop_notifications: "unavailable".to_string(),
+            attention_request: "unavailable".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopNotificationPayload {
+    should_notify: bool,
+    delivery: String,
+    title: Option<String>,
+    body: Option<String>,
+    reason: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WindowSnapshot {
+    pub windows: Vec<ExternalWindowInfo>,
+    pub detected_at: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ActiveSurfaceResult {
+    pub resolution_tier: String,
+    pub confidence: String,
+    pub provider: Option<String>,
+    pub provider_session_id: Option<String>,
+    pub reason: String,
+    pub source: String,
+    pub capabilities: ActiveSurfaceCapabilities,
+}
 
 fn get_api_key() -> String {
     std::env::var("TTM_DESKTOP_API_KEY").unwrap_or_else(|_| "".to_string())
+}
+
+fn build_authenticated_url(base_url: &str) -> String {
+    let api_key = get_api_key();
+    if api_key.is_empty() {
+        base_url.to_string()
+    } else {
+        format!("{}?api_key={}", base_url, api_key)
+    }
+}
+
+const SUPPORTED_PROVIDERS: &[&str] = &["Codex", "OpenCode", "Open Code", "Claude", "Cursor"];
+
+fn is_supported_provider(app_name: &str) -> bool {
+    let lower = app_name.to_lowercase();
+    SUPPORTED_PROVIDERS
+        .iter()
+        .any(|p| lower.contains(&p.to_lowercase()))
+}
+
+fn map_provider(app_name: &str) -> Option<String> {
+    let lower = app_name.to_lowercase();
+    if lower.contains("codex") {
+        Some("codex".to_string())
+    } else if lower.contains("opencode") || lower.contains("open code") {
+        Some("opencode".to_string())
+    } else if lower.contains("claude") {
+        Some("claude".to_string())
+    } else if lower.contains("cursor") {
+        Some("cursor".to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn get_active_window_impl() -> WindowSnapshot {
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let output = Command::new("osascript")
+        .args([
+            "-e",
+            r#"
+            tell application "System Events"
+                set frontApp to first application process whose frontmost is true
+                set appName to name of frontApp
+                set appPath to ""
+                try
+                    set winCount to count of windows of frontApp
+                    if winCount > 0 then
+                        set winTitle to name of first window of frontApp
+                        return appName & "|" & appPath & "|" & winTitle
+                    end if
+                end try
+                return appName & "|" & appPath & "|" & "no title"
+            end tell
+            "#,
+        ])
+        .output();
+
+    match output {
+        Ok(result) => {
+            if result.status.success() {
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                let parts: Vec<&str> = stdout.trim().split('|').collect();
+                if parts.len() >= 3 {
+                    let app_name = parts[0].to_string();
+                    let process_path = if parts[1].trim().is_empty() {
+                        None
+                    } else {
+                        Some(parts[1].to_string())
+                    };
+                    let title = if parts[2] == "no title" {
+                        None
+                    } else {
+                        Some(parts[2].to_string())
+                    };
+
+                    let is_supported = is_supported_provider(&app_name);
+
+                    return WindowSnapshot {
+                        windows: vec![ExternalWindowInfo {
+                            external_window_id: format!("macos-{}-0", app_name.replace(" ", "-").to_lowercase()),
+                            title,
+                            app_name: Some(app_name.clone()),
+                            process_id: None,
+                            process_path,
+                            bounds: None,
+                            is_active: true,
+                        }],
+                        detected_at: now,
+                        source: if is_supported {
+                            "native_macos_apple_script".to_string()
+                        } else {
+                            "native_macos_apple_script_unsupported".to_string()
+                        },
+                    };
+                }
+            }
+        }
+        Err(e) => log::warn!("Failed to get active window: {}", e),
+    }
+
+    WindowSnapshot {
+        windows: vec![],
+        detected_at: now,
+        source: "native_macos_fallback".to_string(),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_active_window_impl() -> WindowSnapshot {
+    let now = chrono::Utc::now().to_rfc3339();
+    WindowSnapshot {
+        windows: vec![],
+        detected_at: now,
+        source: "unsupported_platform".to_string(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn get_open_windows_impl() -> WindowSnapshot {
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let output = Command::new("osascript")
+        .args([
+            "-e",
+            r#"
+            tell application "System Events"
+                set windowList to ""
+                repeat with proc in (every application process whose background only is false)
+                    try
+                        set appName to name of proc
+                        set appPath to ""
+                        set winCount to count of windows of proc
+                        if winCount > 0 then
+                            repeat with i from 1 to winCount
+                                try
+                                    set winTitle to name of window i of proc
+                                    set windowList to windowList & appName & "|" & appPath & "|" & winTitle & "||"
+                                end try
+                            end repeat
+                        end if
+                    end try
+                end repeat
+                return windowList
+            end tell
+            "#,
+        ])
+        .output();
+
+    let mut windows: Vec<ExternalWindowInfo> = vec![];
+
+    if let Ok(result) = output {
+        if result.status.success() {
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            for entry in stdout.trim().split("||") {
+                if entry.is_empty() {
+                    continue;
+                }
+                let parts: Vec<&str> = entry.split('|').collect();
+                if parts.len() >= 3 {
+                    let app_name = parts[0].to_string();
+                    let process_path = if parts[1].trim().is_empty() {
+                        None
+                    } else {
+                        Some(parts[1].to_string())
+                    };
+                    let title = if parts[2].is_empty() || parts[2] == "no title" {
+                        None
+                    } else {
+                        Some(parts[2].to_string())
+                    };
+
+                    windows.push(ExternalWindowInfo {
+                        external_window_id: format!(
+                            "macos-{}-{}",
+                            app_name.replace(" ", "-"),
+                            windows.len()
+                        ),
+                        title,
+                        app_name: Some(app_name.clone()),
+                        process_id: None,
+                        process_path,
+                        bounds: None,
+                        is_active: false,
+                    });
+                }
+            }
+        }
+    }
+
+    let source = if windows.is_empty() {
+        "native_macos_fallback".to_string()
+    } else {
+        "native_macos_apple_script".to_string()
+    };
+
+    WindowSnapshot {
+        windows,
+        detected_at: now,
+        source,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_open_windows_impl() -> WindowSnapshot {
+    let now = chrono::Utc::now().to_rfc3339();
+    WindowSnapshot {
+        windows: vec![],
+        detected_at: now,
+        source: "unsupported_platform".to_string(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn get_capabilities_impl() -> ActiveSurfaceCapabilities {
+    let active_window = get_active_window_impl();
+    let open_windows = get_open_windows_impl();
+
+    let has_supported_windows = active_window
+        .windows
+        .iter()
+        .any(|w| w.app_name.as_ref().map(|a| is_supported_provider(a)).unwrap_or(false))
+        || open_windows.windows.iter().any(|w| {
+            w.app_name
+                .as_ref()
+                .map(|a| is_supported_provider(a))
+                .unwrap_or(false)
+        });
+
+    ActiveSurfaceCapabilities {
+        active_window_detection: if has_supported_windows {
+            "available".to_string()
+        } else {
+            "degraded".to_string()
+        },
+        open_window_registry: if !open_windows.windows.is_empty() {
+            "available".to_string()
+        } else {
+            "degraded".to_string()
+        },
+        browser_url_enrichment: "unavailable".to_string(),
+        browser_native_messaging: "unavailable".to_string(),
+        desktop_notifications: "available".to_string(),
+        attention_request: "available".to_string(),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_capabilities_impl() -> ActiveSurfaceCapabilities {
+    ActiveSurfaceCapabilities::default()
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_active_surface_impl() -> ActiveSurfaceResult {
+    let caps = get_capabilities_impl();
+    let active = get_active_window_impl();
+    let open = get_open_windows_impl();
+
+    let mut all_windows: Vec<&ExternalWindowInfo> = active.windows.iter().collect();
+    for w in &open.windows {
+        if !all_windows
+            .iter()
+            .any(|aw| aw.external_window_id == w.external_window_id)
+        {
+            all_windows.push(w);
+        }
+    }
+
+    let provider_window = all_windows.iter().find(|w| {
+        w.app_name
+            .as_ref()
+            .map(|a| is_supported_provider(a))
+            .unwrap_or(false)
+    });
+
+    if let Some(window) = provider_window {
+        if let Some(app_name) = &window.app_name {
+            if let Some(provider) = map_provider(app_name) {
+                let is_active = window.is_active;
+                return ActiveSurfaceResult {
+                    resolution_tier: if is_active {
+                        "tier_2_provider_window".to_string()
+                    } else {
+                        "tier_3_provider_window_plus_candidate_session".to_string()
+                    },
+                    confidence: if is_active {
+                        "medium".to_string()
+                    } else {
+                        "low".to_string()
+                    },
+                    provider: Some(provider),
+                    provider_session_id: None,
+                    reason: if is_active {
+                        format!("Active {} window detected via native macOS", app_name)
+                    } else {
+                        format!("Open {} window found via native macOS", app_name)
+                    },
+                    source: if is_active {
+                        "native_macos_apple_script".to_string()
+                    } else {
+                        "open_window_registry".to_string()
+                    },
+                    capabilities: caps,
+                };
+            }
+        }
+    }
+
+    ActiveSurfaceResult {
+        resolution_tier: "tier_1_latest_session".to_string(),
+        confidence: "low".to_string(),
+        provider: None,
+        provider_session_id: None,
+        reason: "No supported provider window found - using latest-session fallback".to_string(),
+        source: "latest_session_fallback".to_string(),
+        capabilities: caps,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_active_surface_impl() -> ActiveSurfaceResult {
+    ActiveSurfaceResult {
+        resolution_tier: "tier_0_none".to_string(),
+        confidence: "none".to_string(),
+        provider: None,
+        provider_session_id: None,
+        reason: "Platform not supported".to_string(),
+        source: "unsupported_platform".to_string(),
+        capabilities: ActiveSurfaceCapabilities::default(),
+    }
+}
+
+#[tauri::command]
+fn get_active_window() -> Result<WindowSnapshot, String> {
+    Ok(get_active_window_impl())
+}
+
+#[tauri::command]
+fn get_open_windows() -> Result<WindowSnapshot, String> {
+    Ok(get_open_windows_impl())
+}
+
+#[tauri::command]
+fn get_active_surface_capabilities() -> ActiveSurfaceCapabilities {
+    get_capabilities_impl()
+}
+
+#[tauri::command]
+fn resolve_active_surface() -> Result<ActiveSurfaceResult, String> {
+    Ok(resolve_active_surface_impl())
 }
 
 fn focus_window(app: &AppHandle, label: &str) {
@@ -29,6 +455,27 @@ fn focus_window(app: &AppHandle, label: &str) {
         let _ = window.set_focus();
     }
 }
+
+#[cfg(target_os = "macos")]
+fn escape_applescript_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(target_os = "macos")]
+fn show_native_notification(title: &str, body: &str) {
+    let script = format!(
+        "display notification \"{}\" with title \"{}\"",
+        escape_applescript_string(body),
+        escape_applescript_string(title)
+    );
+
+    if let Err(error) = Command::new("osascript").args(["-e", &script]).output() {
+        log::warn!("Failed to show native notification: {}", error);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_native_notification(_title: &str, _body: &str) {}
 
 fn show_dashboard_window(app: &AppHandle) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(DASHBOARD_WINDOW_LABEL) {
@@ -110,12 +557,7 @@ pub fn get_tray_cost_cents() -> u32 {
 fn poll_spend_and_update_tray(app: &AppHandle) {
     let app_handle = app.clone();
     std::thread::spawn(move || {
-        let api_key = get_api_key();
-        let url = if api_key.is_empty() {
-            DESKTOP_API_URL.to_string()
-        } else {
-            format!("{}?api_key={}", DESKTOP_API_URL, api_key)
-        };
+        let url = build_authenticated_url(DESKTOP_API_URL);
 
         let request = ureq::get(&url).timeout(Duration::from_secs(5));
         let response = request.call();
@@ -146,9 +588,48 @@ fn poll_spend_and_update_tray(app: &AppHandle) {
     });
 }
 
+fn poll_notification_and_deliver() {
+    std::thread::spawn(move || {
+        let url = build_authenticated_url(DESKTOP_NOTIFICATION_API_URL);
+        let request = ureq::get(&url).timeout(Duration::from_secs(5));
+
+        match request.call() {
+            Ok(response) => {
+                if let Ok(body) = response.into_string() {
+                    match serde_json::from_str::<DesktopNotificationPayload>(&body) {
+                        Ok(payload) => {
+                            if payload.should_notify {
+                                if let (Some(title), Some(body)) =
+                                    (payload.title.as_deref(), payload.body.as_deref())
+                                {
+                                    show_native_notification(title, body);
+                                }
+                            } else if payload.delivery == "desktop_notification" {
+                                log::info!("Notification gate closed: {}", payload.reason);
+                            }
+                        }
+                        Err(error) => {
+                            log::warn!("Failed to parse desktop notification payload: {}", error);
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                log::debug!("Notification poll skipped: {}", error);
+            }
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            get_active_window,
+            get_open_windows,
+            get_active_surface_capabilities,
+            resolve_active_surface
+        ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -170,7 +651,7 @@ pub fn run() {
                 .menu(&menu)
                 .title("$0.00")
                 .tooltip("Token Tracker — $0.00 total")
-                .show_menu_on_left_click(true)
+                .show_menu_on_left_click(false)
                 .on_menu_event(move |app: &AppHandle, event| match event.id.as_ref() {
                     "quit" => {
                         app.exit(0);
@@ -205,9 +686,11 @@ pub fn run() {
             // Poll spend data and update tray title every 30 seconds
             let app_handle = app.handle().clone();
             poll_spend_and_update_tray(&app_handle); // Initial poll
+            poll_notification_and_deliver();
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(30));
                 poll_spend_and_update_tray(&app_handle);
+                poll_notification_and_deliver();
             });
 
             Ok(())

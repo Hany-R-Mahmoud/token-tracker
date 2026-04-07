@@ -3,6 +3,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ProviderId } from '@ttm/core';
 import {
+  ClaudeAdapter,
   CodexAdapter,
   OpenCodeAdapter,
   StaticPricingReader,
@@ -63,7 +64,7 @@ async function main(): Promise<void> {
 
 async function runDoctor(): Promise<void> {
   const database = new TtmDatabase();
-  const adapters = [new CodexAdapter(), new OpenCodeAdapter()];
+  const adapters = [new CodexAdapter(), new OpenCodeAdapter(), new ClaudeAdapter()];
   const adapterProviders = new Set<string>(adapters.map((a) => a.provider));
 
   process.stdout.write(`${formatKeyValueLine('database', database.path || defaultDatabasePath())}\n`);
@@ -139,7 +140,7 @@ function formatStrategyStatus(status: string): string {
 
 async function runImport(): Promise<void> {
   const database = new TtmDatabase();
-  const adapters = [new CodexAdapter(), new OpenCodeAdapter()];
+  const adapters = [new CodexAdapter(), new OpenCodeAdapter(), new ClaudeAdapter()];
   let importedSessions = 0;
   let scannedSources = 0;
   const warnings = new Set<string>();

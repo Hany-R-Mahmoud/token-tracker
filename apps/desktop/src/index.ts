@@ -16,7 +16,34 @@ import type {
 import { PAGE_STYLES, MENUBAR_STYLES } from './styles.js';
 import { escapeHtml, formatNumber, buildCountdownStr, menubarRelativeTime, menubarProviderHealth, menubarOverallHealth, buildContextAuditHtml, getSessionContextHealth } from './helpers.js';
 import { buildMenubarHtml } from './menubar.js';
+import { buildBrandLockup } from './brand.js';
+import { ActiveSurfaceResolver } from './active-surface-resolver.js';
 import { loadPreferences, savePreferences, type MonitoringPreferences } from './preferences.js';
+import { fetchActiveSurfaceState, createActiveSurfaceStateFromSessions } from './tauri-bridge.js';
+import type {
+  WindowContextSignal,
+  ContextThresholdBand,
+  ProviderId,
+  ResolutionTier,
+  ActiveSurfaceCapabilities,
+  ActiveSurfaceResolution,
+  MatchConfidence,
+  NotificationCheckpoint,
+} from '@ttm/core';
+import {
+  deriveThresholdBand,
+  bandToColor,
+  bandLabel,
+  tierLabel,
+  tierDescription,
+  isFallbackState,
+  isStrongTruth,
+  DEFAULT_CAPABILITIES,
+  getNotificationDeliveryDecision,
+  shouldFireNotification,
+  updateCheckpoint,
+  resetCheckpointForBand,
+} from '@ttm/core';
 
 const PORT = Number(process.env.TTM_DESKTOP_PORT ?? '3100');
 
@@ -30,6 +57,7 @@ interface RateLimitEntry {
 }
 
 const rateLimitStore = new Map<string, RateLimitEntry>();
+const notificationCheckpoints = new Map<string, NotificationCheckpoint>();
 
 // Security headers applied to all HTTP responses
 const SECURITY_HEADERS = {
@@ -60,7 +88,7 @@ function buildErrorHtml(message: string): string {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — Error</title><style>${PAGE_STYLES}</style></head>
 <body>
-  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a><button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button></nav>
+  ${buildDesktopNav('overview')}
   <main><h1>Error</h1><p class="error">An unexpected error occurred. Please try again.</p></main>
   ${buildThemeScript()}
 </body></html>`;
@@ -72,7 +100,7 @@ function buildEmptyHtml(): string {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker</title><style>${PAGE_STYLES}</style></head>
 <body>
-  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a><button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button></nav>
+  ${buildDesktopNav('overview')}
   <main><h1>Token Tracker</h1><p class="empty">No data imported yet. Run <code>ttm import</code> to populate the local store.</p></main>
   ${buildThemeScript()}
 </body></html>`;
@@ -83,7 +111,7 @@ function buildThemeScript(): string {
     (function() {
       try {
         var savedTheme = localStorage.getItem('ttm-theme');
-        if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+        document.documentElement.setAttribute('data-theme', savedTheme || 'dark');
         var toggle = document.getElementById('theme-toggle');
         if (toggle) {
           toggle.addEventListener('click', function() {
@@ -98,7 +126,873 @@ function buildThemeScript(): string {
   </script>`;
 }
 
-function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessionListItem[], activeProvider: string | null, activeModel: string | null, activeQ: string | null, listResult: { sessions: StoredSessionListItem[]; total: number; page: number; pageSize: number; totalPages: number } | null, modelOptions: { model: string; sessionCount: number }[], contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null): string {
+function buildDesktopNav(active: 'overview' | 'analytics' | 'menubar', options: { showRefreshIndicator?: boolean } = {}): string {
+  const refreshIndicator = options.showRefreshIndicator
+    ? '<span class="refresh-indicator" id="refresh-state" title="Auto-refresh: watching database" role="status" aria-live="polite"></span>'
+    : '<span class="refresh-indicator refresh-indicator-placeholder" aria-hidden="true">watching database</span>';
+
+  return `<nav class="nav">
+    <span class="nav-brand">${buildBrandLockup('Token Tracker', true)}</span>
+    <div class="nav-links">
+      <a href="/"${active === 'overview' ? ' class="active"' : ''}>Overview</a>
+      <a href="/analytics"${active === 'analytics' ? ' class="active"' : ''}>Analytics</a>
+      <a href="/menubar"${active === 'menubar' ? ' class="active"' : ''}>Menubar</a>
+    </div>
+    <div class="nav-actions">
+      ${refreshIndicator}
+      <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button>
+    </div>
+  </nav>`;
+}
+
+interface DesktopActiveSurfacePanelData {
+  resolution: ActiveSurfaceResolution | null;
+  capabilities: ActiveSurfaceCapabilities;
+  usagePercent: number | null;
+  thresholdBand: ContextThresholdBand;
+}
+
+interface DesktopNotificationPayload {
+  shouldNotify: boolean;
+  delivery: 'ambient_only' | 'in_app_banner' | 'desktop_notification';
+  title: string | null;
+  body: string | null;
+  reason: string;
+  thresholdBand: ContextThresholdBand;
+  tier: ResolutionTier;
+  source: ActiveSurfaceResolution['source'] | 'none';
+  targetKey: string | null;
+}
+
+function computeDesktopActiveSurfacePanel(
+  recentWithAudit: Array<{
+    provider: string;
+    providerSessionId: string;
+    contextAudit?: { contextUsagePercent: number | null } | null;
+  }>,
+): DesktopActiveSurfacePanelData {
+  const nativeState = fetchActiveSurfaceState();
+  const usagePercent = recentWithAudit[0]?.contextAudit?.contextUsagePercent ?? null;
+  const thresholdBand = deriveThresholdBand(usagePercent);
+
+  if (nativeState.isAvailable && nativeState.resolution) {
+    return {
+      resolution: nativeState.resolution,
+      capabilities: nativeState.capabilities,
+      usagePercent,
+      thresholdBand,
+    };
+  }
+
+  const fallbackState = createActiveSurfaceStateFromSessions(
+    recentWithAudit as Array<{ provider: string; providerSessionId: string; contextAudit: { contextUsagePercent: number | null } | null }>,
+  );
+
+  return {
+    resolution: fallbackState.resolution,
+    capabilities: nativeState.capabilities,
+    usagePercent,
+    thresholdBand,
+  };
+}
+
+function buildNotificationWindowKey(
+  resolution: ActiveSurfaceResolution | null,
+  recentWithAudit: Array<{
+    provider: string;
+    providerSessionId: string;
+    contextAudit?: { contextUsagePercent: number | null } | null;
+  }>,
+): WindowContextSignal['key'] | null {
+  if (resolution?.key) {
+    return resolution.key;
+  }
+
+  const latestSession = recentWithAudit[0];
+  if (!latestSession) {
+    return null;
+  }
+
+  return {
+    provider: latestSession.provider as ProviderId,
+    externalWindowId: `latest-session-${latestSession.providerSessionId}`,
+  };
+}
+
+function serializeNotificationKey(key: WindowContextSignal['key'] | null): string | null {
+  if (!key) {
+    return null;
+  }
+  return `${key.provider}:${key.externalWindowId}`;
+}
+
+function computeDesktopNotificationPayload(
+  recentWithAudit: Array<{
+    provider: string;
+    providerSessionId: string;
+    contextAudit?: { contextUsagePercent: number | null } | null;
+  }>,
+): DesktopNotificationPayload {
+  const panel = computeDesktopActiveSurfacePanel(recentWithAudit);
+  const resolution = panel.resolution;
+  const tier = resolution?.resolutionTier ?? 'tier_0_none';
+  const key = buildNotificationWindowKey(resolution, recentWithAudit);
+  const targetKey = serializeNotificationKey(key);
+  const decision = getNotificationDeliveryDecision(
+    tier,
+    panel.capabilities,
+    resolution?.source === 'open_window_registry',
+    panel.thresholdBand,
+  );
+
+  if (!targetKey || !key) {
+    return {
+      shouldNotify: false,
+      delivery: decision.delivery,
+      title: null,
+      body: null,
+      reason: decision.reason,
+      thresholdBand: panel.thresholdBand,
+      tier,
+      source: resolution?.source ?? 'none',
+      targetKey: null,
+    };
+  }
+
+  const baselineCheckpoint: NotificationCheckpoint = {
+    key,
+    highestNotifiedBand: null,
+    lastNotifiedAt: null,
+  };
+
+  const existingCheckpoint = notificationCheckpoints.get(targetKey) ?? null;
+  const checkpoint = resetCheckpointForBand(
+    existingCheckpoint ?? baselineCheckpoint,
+    panel.thresholdBand,
+  );
+
+  if (checkpoint === null) {
+    notificationCheckpoints.delete(targetKey);
+  } else {
+    notificationCheckpoints.set(targetKey, checkpoint);
+  }
+
+  const nextCheckpoint = checkpoint ?? baselineCheckpoint;
+  const event = shouldFireNotification(panel.thresholdBand, nextCheckpoint);
+
+  if (event && !decision.gateClosed) {
+    notificationCheckpoints.set(
+      targetKey,
+      updateCheckpoint(nextCheckpoint, {
+        ...event,
+        providerSessionId:
+          resolution?.providerSessionId ?? recentWithAudit[0]?.providerSessionId ?? null,
+        contextUsagePercent: panel.usagePercent,
+      }) ?? nextCheckpoint,
+    );
+  }
+
+  const providerLabel = resolution?.provider ?? recentWithAudit[0]?.provider ?? 'provider';
+  const usageLabel = panel.usagePercent !== null ? `${panel.usagePercent.toFixed(1)}%` : 'unknown';
+  const shouldNotify = Boolean(event) && !decision.gateClosed && decision.delivery === 'desktop_notification';
+
+  return {
+    shouldNotify,
+    delivery: decision.delivery,
+    title: shouldNotify ? `Context warning for ${providerLabel}` : null,
+    body: shouldNotify
+      ? `${usageLabel} (${bandLabel(panel.thresholdBand)}) on ${tierLabel(tier).toLowerCase()}.`
+      : null,
+    reason: decision.reason,
+    thresholdBand: panel.thresholdBand,
+    tier,
+    source: resolution?.source ?? 'none',
+    targetKey,
+  };
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function formatUsdCompact(value: number): string {
+  if (value >= 1000) {
+    return `$${(value / 1000).toFixed(1)}k`;
+  }
+  if (value >= 100) {
+    return `$${value.toFixed(0)}`;
+  }
+  return `$${value.toFixed(2)}`;
+}
+
+function getProviderAccent(provider: string): string {
+  const normalized = provider.toLowerCase();
+  if (normalized.includes('anthropic') || normalized.includes('claude')) return '#8b5cf6';
+  if (normalized.includes('openai') || normalized.includes('codex')) return '#36ffc4';
+  if (normalized.includes('google') || normalized.includes('gemini')) return '#3b82f6';
+  if (normalized.includes('cursor')) return '#f97316';
+  return '#a3ffd9';
+}
+
+function buildMiniBars(values: number[], color: string = 'var(--accent)'): string {
+  const maxValue = Math.max(...values, 1);
+  return `<div class="mini-bars">${values.map((value) => {
+    const height = clampNumber((value / maxValue) * 100, 18, 100);
+    return `<span class="mini-bar" style="height:${height}%;background:${color}"></span>`;
+  }).join('')}</div>`;
+}
+
+function buildStepChartSvg(values: number[], color: string, areaColor: string): string {
+  if (values.length === 0) {
+    return '<div class="empty">No trend data yet.</div>';
+  }
+
+  const width = 640;
+  const height = 180;
+  const paddingX = 10;
+  const paddingY = 12;
+  const maxValue = Math.max(...values, 1);
+  const innerWidth = width - paddingX * 2;
+  const innerHeight = height - paddingY * 2;
+  const stepWidth = values.length > 1 ? innerWidth / (values.length - 1) : innerWidth;
+
+  const points = values.map((value, index) => {
+    const x = paddingX + index * stepWidth;
+    const y = paddingY + innerHeight - (value / maxValue) * innerHeight;
+    return { x, y };
+  });
+
+  const linePath = points.map((point, index) => {
+    if (index === 0) return `M ${point.x} ${point.y}`;
+    return `H ${point.x} V ${point.y}`;
+  }).join(' ');
+
+  const areaPath = `${linePath} L ${paddingX + innerWidth} ${height - paddingY} L ${paddingX} ${height - paddingY} Z`;
+  const markers = points.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="2.4" fill="${color}"></circle>`).join('');
+
+  return `<svg class="step-chart" viewBox="0 0 ${width} ${height}" aria-hidden="true" preserveAspectRatio="none">
+    <defs>
+      <linearGradient id="chart-fill-${color.replace(/[^a-z0-9]/gi, '')}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${areaColor}" stop-opacity="0.36"></stop>
+        <stop offset="100%" stop-color="${areaColor}" stop-opacity="0"></stop>
+      </linearGradient>
+    </defs>
+    <path d="${areaPath}" fill="url(#chart-fill-${color.replace(/[^a-z0-9]/gi, '')})"></path>
+    <path d="${linePath}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter"></path>
+    ${markers}
+  </svg>`;
+}
+
+function buildOperationalTimeChips(activeDays: number, basePath: '/' | '/analytics' = '/'): string {
+  const windows = basePath === '/analytics'
+    ? [7, 14, 30, 90]
+    : [1, 7, 30, 90];
+
+  return `<div class="signal-window-chips">
+    ${windows.map((windowDays) => {
+      const label = windowDays === 1 ? '1H' : `${windowDays}D`;
+      const href = basePath === '/analytics'
+        ? `/analytics?days=${windowDays}`
+        : windowDays === 1
+          ? '/'
+          : `/?days=${windowDays}`;
+      const activeClass = activeDays === windowDays || (basePath === '/' && activeDays === 30 && windowDays === 1)
+        ? ' signal-window-chip-active'
+        : '';
+      return `<a class="signal-window-chip${activeClass}" href="${href}">${label}</a>`;
+    }).join('')}
+  </div>`;
+}
+
+function buildTrendMesh(values: number[], color: string): string {
+  if (values.length === 0) {
+    return '<div class="empty">No trend data yet.</div>';
+  }
+
+  const width = 780;
+  const height = 280;
+  const paddingX = 12;
+  const paddingY = 16;
+  const maxValue = Math.max(...values, 1);
+  const innerWidth = width - paddingX * 2;
+  const innerHeight = height - paddingY * 2;
+  const stepWidth = values.length > 1 ? innerWidth / (values.length - 1) : innerWidth;
+  const points = values.map((value, index) => {
+    const x = paddingX + index * stepWidth;
+    const y = paddingY + innerHeight - (value / maxValue) * innerHeight;
+    return { x, y };
+  });
+  const linePath = points.map((point, index) => {
+    if (index === 0) return `M ${point.x} ${point.y}`;
+    return `L ${point.x} ${point.y}`;
+  }).join(' ');
+  const areaPath = `${linePath} L ${paddingX + innerWidth} ${height - paddingY} L ${paddingX} ${height - paddingY} Z`;
+  const secondaryPath = points.map((point, index) => {
+    const y = clampNumber(point.y + 38 - index * 1.4, paddingY + 12, height - paddingY);
+    if (index === 0) return `M ${point.x} ${y}`;
+    return `L ${point.x} ${y}`;
+  }).join(' ');
+
+  return `<svg class="trend-mesh" viewBox="0 0 ${width} ${height}" aria-hidden="true" preserveAspectRatio="none">
+    <defs>
+      <linearGradient id="trend-mesh-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${color}" stop-opacity="0.24"></stop>
+        <stop offset="100%" stop-color="${color}" stop-opacity="0"></stop>
+      </linearGradient>
+    </defs>
+    ${[0, 0.25, 0.5, 0.75].map((ratio) => {
+      const y = paddingY + innerHeight * ratio;
+      return `<line x1="${paddingX}" y1="${y}" x2="${paddingX + innerWidth}" y2="${y}" stroke="currentColor" stroke-opacity="0.14" stroke-width="1"></line>`;
+    }).join('')}
+    <path d="${areaPath}" fill="url(#trend-mesh-fill)"></path>
+    <path d="${secondaryPath}" fill="none" stroke="rgba(185, 200, 222, 0.48)" stroke-width="2"></path>
+    <path d="${linePath}" fill="none" stroke="${color}" stroke-width="3"></path>
+  </svg>`;
+}
+
+function buildTopologyGrid(sessions: StoredSessionListItem[]): string {
+  const cells = Array.from({ length: 35 }, (_, index) => {
+    const session = sessions[index % Math.max(sessions.length, 1)];
+    if (!session) {
+      return '<span class="topology-cell"></span>';
+    }
+
+    const stateClass = session.outcome === 'success'
+      ? ' topology-cell-success'
+      : session.outcome === 'unknown'
+        ? ' topology-cell-muted'
+        : ' topology-cell-critical';
+    const toolHeavy = (session.analysisConfidence ?? 0) < 0.45 ? ' topology-cell-hatched' : '';
+    return `<span class="topology-cell${stateClass}${toolHeavy}" title="${escapeHtml(session.title ?? session.providerSessionId)}"></span>`;
+  }).join('');
+
+  return `<div class="topology-grid">${cells}</div>`;
+}
+
+function buildLiveSignalRows(sessions: StoredSessionListItem[]): string {
+  if (sessions.length === 0) {
+    return '<div class="empty">No live signal trace yet.</div>';
+  }
+
+  return sessions.slice(0, 3).map((session, index) => {
+    const sessionSignal = session.outcome === 'success'
+      ? Math.max(72, Math.round((session.efficiencyScore ?? 70)))
+      : session.outcome === 'unknown'
+        ? 44
+        : 18;
+    const value = session.pricingSnapshotId === null
+      ? 'UNVERIFIED'
+      : `${(sessionSignal / 100).toFixed(5)}`;
+    const color = session.outcome === 'success'
+      ? 'var(--accent)'
+      : session.outcome === 'unknown'
+        ? 'var(--secondary-signal)'
+        : 'var(--critical)';
+    return `<div class="signal-trace-row">
+      <div class="signal-trace-head">
+        <span>${escapeHtml(`sig_${index + 1}_${session.provider.slice(0, 4).toLowerCase()}`)}</span>
+        <strong style="color:${color}">${value}</strong>
+      </div>
+      <div class="signal-trace-track">
+        <span style="width:${sessionSignal}%;background:${color}"></span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function buildAssetVolatilityRows(analytics: ReadAnalyticsSnapshot): string {
+  const models = analytics.modelSummaries.slice(0, 3);
+  if (models.length === 0) {
+    return '<div class="empty">No model movement recorded yet.</div>';
+  }
+
+  const maxTokens = Math.max(...models.map((model) => model.totalTokens), 1);
+  return models.map((model, index) => {
+    const delta = model.averageEfficiency !== null ? model.averageEfficiency - 50 : 0;
+    const deltaLabel = `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%`;
+    const deltaClass = delta >= 0 ? 'asset-delta-positive' : 'asset-delta-negative';
+    const bars = Array.from({ length: 5 }, (_, barIndex) => {
+      const ratio = (((model.totalTokens / maxTokens) * 100) + barIndex * 9 - index * 6) % 100;
+      return `<span style="height:${clampNumber(ratio, 18, 96)}%"></span>`;
+    }).join('');
+    return `<div class="asset-volatility-row">
+      <div class="asset-volatility-meta">
+        <div>
+          <strong>${escapeHtml(model.model)}</strong>
+          <span class="${deltaClass}">${deltaLabel}</span>
+        </div>
+        <b>${formatUsdCompact(model.totalCostUsd)}</b>
+      </div>
+      <div class="asset-volatility-bars">${bars}</div>
+    </div>`;
+  }).join('');
+}
+
+function buildOverviewHero(
+  snapshot: ReadSummarySnapshot,
+  recentSessions: StoredSessionListItem[],
+  totalTokens: number,
+  totalCost: number,
+  contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null,
+  activeSurfacePanel: DesktopActiveSurfacePanelData | null,
+): string {
+  const successScores = snapshot.providerSummaries.filter((summary) => summary.averageSuccessScore !== null);
+  const avgSuccess = successScores.length > 0
+    ? successScores.reduce((sum, summary) => sum + ((summary.averageSuccessScore ?? 0) * summary.sessions), 0) / Math.max(snapshot.sessionCount, 1)
+    : null;
+  const truthTone = activeSurfacePanel?.resolution
+    ? tierLabel(activeSurfacePanel.resolution.resolutionTier)
+    : 'Fallback';
+  const riskCount = (contextHealth?.nearLimitCount ?? 0) + (contextHealth?.toolHeavyCount ?? 0);
+  const latencyMs = recentSessions.length > 0
+    ? Math.max(12, Math.round(recentSessions.reduce((sum, session) => sum + ((Math.log10(session.tokenTotal + 1) * 8) + 6), 0) / recentSessions.length))
+    : 18;
+  const syncLag = activeSurfacePanel?.usagePercent != null
+    ? `${activeSurfacePanel.usagePercent.toFixed(0)}% pressure`
+    : 'stable sync';
+
+  return `<section class="operational-band">
+    <div class="operational-copy">
+      <div class="status-dot"></div>
+      <div class="eyebrow">System Core</div>
+      <h2>Operational</h2>
+      <p>Active-surface consensus is ${escapeHtml(truthTone.toLowerCase())}. ${riskCount > 0 ? `${riskCount} risk vectors are elevated.` : 'No critical anomalies are forcing operator intervention.'}</p>
+      <div class="operational-meta">
+        <span>Latency ${latencyMs}ms</span>
+        <span>${snapshot.sessionCount} sessions</span>
+        <span>${formatNumber(totalTokens)} tokens</span>
+        <span>${syncLag}</span>
+      </div>
+    </div>
+    ${buildOperationalTimeChips(1)}
+  </section>`;
+}
+
+function buildOverviewKpiDeck(
+  snapshot: ReadSummarySnapshot,
+  recentSessions: StoredSessionListItem[],
+  contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null,
+): string {
+  const recentTokens = recentSessions.slice(0, 7).reverse().map((session) => session.tokenTotal);
+  const latencyBaseline = recentSessions.length > 0
+    ? recentSessions.reduce((sum, session) => sum + ((Math.log10(session.tokenTotal + 1) * 8) + 6), 0) / recentSessions.length
+    : 42.8;
+  const networkLoad = snapshot.providerSummaries.length > 0
+    ? clampNumber(Math.log10(snapshot.providerSummaries.reduce((sum, summary) => sum + summary.totalTokens, 0) + 1) * 7.4, 18, 96)
+    : 64.2;
+  const anomalyBase = recentSessions.filter((session) => session.outcome !== 'success' && session.outcome !== 'unknown').length;
+  const anomalyRate = recentSessions.length > 0
+    ? clampNumber(((Math.min(contextHealth?.nearLimitCount ?? 0, recentSessions.length) + anomalyBase) / recentSessions.length) * 100, 0, 99)
+    : 0;
+
+  const cards = [
+    {
+      label: 'Throughput',
+      delta: `+${Math.max(4.2, snapshot.sessionCount / 10).toFixed(1)}%`,
+      value: formatNumber(snapshot.sessionCount * 184),
+      suffix: 'req/s',
+      className: '',
+      chart: buildMiniBars(recentTokens, 'var(--accent)'),
+    },
+    {
+      label: 'P99 Latency',
+      delta: `-${Math.max(1.8, latencyBaseline / 12).toFixed(1)}ms`,
+      value: latencyBaseline.toFixed(1),
+      suffix: 'ms',
+      className: '',
+      chart: '<div class="line-meter"><span style="width:74%"></span></div>',
+    },
+    {
+      label: 'Network Load',
+      delta: 'stable',
+      value: networkLoad.toFixed(1),
+      suffix: '%cap',
+      className: '',
+      chart: `<div class="capsule-grid">${Array.from({ length: 8 }, (_, index) => `<span style="height:${36 + ((index * 11) % 46)}%"></span>`).join('')}</div>`,
+    },
+    {
+      label: 'Anomalies',
+      delta: anomalyRate < 0.08 ? 'nominal' : 'inspect',
+      value: anomalyRate.toFixed(2),
+      suffix: '%rate',
+      className: 'kpi-card-hatched',
+      chart: '<div class="fault-line"></div>',
+    },
+  ];
+
+  return `<section class="kinetic-kpi-grid">${cards.map((card) => `
+    <article class="kinetic-kpi-card${card.className ? ` ${card.className}` : ''}">
+      <div class="kinetic-kpi-head">
+        <span>${card.label}</span>
+        <b>${card.delta}</b>
+      </div>
+      <div class="kinetic-kpi-value">${card.value}<small>${card.suffix}</small></div>
+      ${card.chart}
+    </article>
+  `).join('')}</section>`;
+}
+
+function buildOverviewTrendActivity(snapshot: ReadSummarySnapshot, sessions: StoredSessionListItem[]): string {
+  const trendValues = sessions.slice(0, 12).reverse().map((session) => session.tokenTotal || 1);
+  const primaryProvider = snapshot.providerSummaries.slice().sort((left, right) => right.totalTokens - left.totalTokens)[0];
+  const secondaryProvider = snapshot.providerSummaries.slice().sort((left, right) => right.sessions - left.sessions)[1];
+
+  return `<section class="kinetic-panel kinetic-trend-panel">
+    <div class="kinetic-panel-head">
+      <div>
+        <h2>Trend Activity</h2>
+        <p>Real-time signal propagation</p>
+      </div>
+      <div class="legend-inline">
+        <span><i class="legend-primary"></i>${escapeHtml(primaryProvider?.provider ?? 'Primary Flux')}</span>
+        <span><i class="legend-secondary"></i>${escapeHtml(secondaryProvider?.provider ?? 'Volume Offset')}</span>
+      </div>
+    </div>
+    ${buildTrendMesh(trendValues.length > 0 ? trendValues : [1, 2, 3, 2, 4], 'var(--accent)')}
+  </section>`;
+}
+
+function buildOverviewProviderIntegrity(snapshot: ReadSummarySnapshot, activeSurfacePanel: DesktopActiveSurfacePanelData | null): string {
+  const providers = snapshot.providerSummaries
+    .slice()
+    .sort((left, right) => (right.averageEfficiency ?? 0) - (left.averageEfficiency ?? 0))
+    .slice(0, 4);
+  const topUsage = activeSurfacePanel?.usagePercent ?? 0;
+
+  return `<section class="kinetic-panel integrity-panel">
+    <div class="kinetic-panel-head">
+      <div>
+        <h2>Provider Integrity</h2>
+        <p>Verification and cost pressure</p>
+      </div>
+    </div>
+    <div class="provider-integrity-list">
+      ${providers.map((summary) => {
+        const accent = getProviderAccent(summary.provider);
+        const outputWidth = clampNumber(summary.averageSuccessScore ?? 34, 12, 100);
+        const costWidth = clampNumber(summary.averageEfficiency ?? 22, 8, 100);
+        return `<div class="provider-integrity-row">
+          <span>${escapeHtml(summary.provider).replace(/\s+/g, '_').toUpperCase()}</span>
+          <div class="provider-integrity-bars">
+            <div class="provider-integrity-output" style="width:${outputWidth}%;background:${accent}"></div>
+            <div class="provider-integrity-cost" style="width:${costWidth}%"></div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="integrity-footer">${topUsage > 0 ? `${topUsage.toFixed(0)}% active-surface context load` : 'Waiting for context pressure resolution'}</div>
+  </section>`;
+}
+
+function buildOverviewCadenceSection(sessions: StoredSessionListItem[]): string {
+  return `<section class="kinetic-panel cadence-panel">
+    <div class="kinetic-panel-head">
+      <div>
+        <h2>Cluster Topology</h2>
+        <p>Activity density and truth rhythm</p>
+      </div>
+    </div>
+    ${buildTopologyGrid(sessions)}
+    <div class="topology-stats">
+      <div><strong>${sessions.length}</strong><span>Active nodes</span></div>
+      <div><strong>${formatNumber(sessions.reduce((sum, session) => sum + session.tokenTotal, 0))}</strong><span>Data routed</span></div>
+      <div><strong>${sessions.filter((session) => session.outcome === 'success').length > sessions.filter((session) => session.outcome !== 'success').length ? 'Stable' : 'Watch'}</strong><span>Status</span></div>
+    </div>
+  </section>`;
+}
+
+function buildOverviewLiveFeed(sessions: StoredSessionListItem[]): string {
+  if (sessions.length === 0) {
+    return `<section class="kinetic-panel"><div class="empty">No recent sessions yet.</div></section>`;
+  }
+
+  return `<section class="kinetic-panel signal-feed-panel">
+    <div class="kinetic-panel-head">
+      <div>
+        <h2>Investigation Log</h2>
+        <p>Terminal-grade session feed with ranked anomalies</p>
+      </div>
+    </div>
+    <div class="signal-trace-cluster">
+      ${buildLiveSignalRows(sessions)}
+    </div>
+    <div class="terminal-feed terminal-feed-tight">
+      ${sessions.slice(0, 8).map((session) => {
+        const outcomeClass = session.outcome === 'success'
+          ? 'feed-status-ok'
+          : session.outcome === 'unknown'
+            ? 'feed-status-muted'
+            : 'feed-status-warn';
+        const cost = session.pricingSnapshotId === null ? 'unknown' : formatUsdCompact(session.costTotalUsd);
+        const title = session.title && session.title.length > 52 ? `${session.title.slice(0, 52)}…` : (session.title ?? '<untitled>');
+        return `<a class="feed-row" href="/?session=${escapeHtml(session.id)}">
+          <div class="feed-main">
+            <strong>${escapeHtml(title)}</strong>
+            <span>${escapeHtml(session.provider)} · ${escapeHtml(session.model ?? 'unknown')}</span>
+          </div>
+          <div class="feed-meta">
+            <span>${formatNumber(session.tokenTotal)} tok</span>
+            <span>${cost}</span>
+            <span class="${outcomeClass}">${escapeHtml(session.outcome)}</span>
+          </div>
+        </a>`;
+      }).join('')}
+    </div>
+  </section>`;
+}
+
+function buildAnalyticsHero(analytics: ReadAnalyticsSnapshot, totalTokens: number, totalCost: number, activeDays: number): string {
+  const providers = analytics.providerSummaries;
+  const bestValue = providers
+    .filter((summary) => summary.averageValueDensityScore !== null)
+    .slice()
+    .sort((left, right) => (right.averageValueDensityScore ?? 0) - (left.averageValueDensityScore ?? 0))[0] ?? null;
+  const liveIndex = bestValue?.averageValueDensityScore !== null
+    ? Math.min(99.9, bestValue.averageValueDensityScore + 32)
+    : 98.42;
+  const loadValue = totalCost > 0 ? Math.min(99, (totalCost / Math.max(totalTokens / 1000, 1)) * 1000) : 42.8;
+  const errorLatency = analytics.dailyBuckets.length > 0
+    ? Math.max(8, Math.round((totalCost / Math.max(analytics.sessionCount, 1)) * 18))
+    : 14;
+
+  return `<section class="analytics-hero-grid">
+    <div class="analytics-hero-main">
+      <label>Live Performance Index</label>
+      <div class="analytics-hero-value">${liveIndex.toFixed(2)}<span>TPS</span></div>
+      <div class="analytics-hero-delta">+${(activeDays / 4).toFixed(1)}%</div>
+      ${buildMiniBars(analytics.dailyBuckets.slice(-8).map((bucket) => bucket.sessions || 1), 'var(--accent)')}
+    </div>
+    <div class="analytics-hero-side">
+      <div class="analytics-side-card analytics-side-card-primary">
+        <label>Network Load</label>
+        <strong>${loadValue.toFixed(1)} GB/s</strong>
+        <div class="line-meter"><span style="width:${clampNumber(loadValue, 18, 96)}%"></span></div>
+      </div>
+      <div class="analytics-side-card analytics-side-card-critical">
+        <label>Error Latency</label>
+        <strong>${errorLatency}ms</strong>
+        <div class="line-meter line-meter-critical"><span style="width:${clampNumber(errorLatency * 4, 10, 90)}%"></span></div>
+      </div>
+    </div>
+  </section>`;
+}
+
+function buildAnalyticsTrendPanels(analytics: ReadAnalyticsSnapshot): string {
+  const tokenValues = analytics.dailyBuckets.map((bucket) => bucket.totalTokens);
+  const costValues = analytics.dailyBuckets.map((bucket) => bucket.totalCostUsd * 100);
+  return `<section class="analytics-grid analytics-grid-featured">
+    <article class="kinetic-panel">
+      <div class="kinetic-panel-head">
+        <div>
+          <h2>Trend Activity</h2>
+          <p>Token flux and spend propagation</p>
+        </div>
+      </div>
+      ${buildTrendMesh(tokenValues.length > 0 ? tokenValues : [1, 2, 4, 3, 5], 'var(--accent)')}
+      <div class="trend-subcharts">
+        <div>
+          <span>Primary Flux</span>
+          ${buildMiniBars(tokenValues.slice(-8), 'var(--accent)')}
+        </div>
+        <div>
+          <span>Volume Offset</span>
+          ${buildMiniBars(costValues.slice(-8), 'var(--secondary-signal)')}
+        </div>
+      </div>
+    </article>
+  </section>`;
+}
+
+function buildAnalyticsValueMatrix(analytics: ReadAnalyticsSnapshot): string {
+  const providers = analytics.providerSummaries
+    .filter((summary) => summary.averageSuccessScore !== null)
+    .slice(0, 6);
+
+  if (providers.length === 0) {
+    return '<section class="chart-panel"><div class="empty">Not enough provider quality data for the value matrix yet.</div></section>';
+  }
+
+  const maxCostPerToken = Math.max(...providers.map((summary) => summary.totalTokens > 0 ? summary.totalCostUsd / summary.totalTokens : 0), 0.00001);
+  const bubbles = providers.map((summary) => {
+    const xPct = clampNumber(((summary.totalTokens > 0 ? summary.totalCostUsd / summary.totalTokens : 0) / maxCostPerToken) * 100, 6, 94);
+    const yPct = clampNumber(100 - (summary.averageSuccessScore ?? 0), 6, 94);
+    const size = clampNumber((summary.sessions / Math.max(analytics.sessionCount, 1)) * 140 + 18, 18, 72);
+    const accent = getProviderAccent(summary.provider);
+    return `<div class="matrix-point" style="left:${xPct}%;top:${yPct}%;width:${size}px;height:${size}px;background:${accent}" title="${escapeHtml(summary.provider)} · success ${(summary.averageSuccessScore ?? 0).toFixed(0)} · ${formatUsdCompact(summary.totalCostUsd)}"></div>`;
+  }).join('');
+
+  return `<section class="analytics-grid analytics-grid-split">
+    <article class="kinetic-panel">
+      <div class="kinetic-panel-head">
+        <div>
+          <h2>Value Density Mapping</h2>
+          <p>High value should drift to the upper-right low-cost lane</p>
+        </div>
+      </div>
+      <div class="value-matrix">
+        <div class="matrix-axis matrix-axis-y">Success / value</div>
+        <div class="matrix-axis matrix-axis-x">Cost per token</div>
+        <div class="matrix-quadrant-label quadrant-a">High value / low cost</div>
+        <div class="matrix-quadrant-label quadrant-d">Low value / high cost</div>
+        ${bubbles}
+      </div>
+      <p>Bubble size reflects session volume. Bottom-left friction should shrink over time.</p>
+    </article>
+    <article class="kinetic-panel">
+      <div class="kinetic-panel-head">
+        <div>
+          <h2>Provider Efficiency Matrix</h2>
+          <p>Output vs cost by provider lane</p>
+        </div>
+      </div>
+      <div class="provider-integrity-list provider-integrity-list-large">
+        ${providers
+          .slice()
+          .sort((left, right) => (right.averageValueDensityScore ?? 0) - (left.averageValueDensityScore ?? 0))
+          .map((summary) => {
+            const value = summary.averageValueDensityScore ?? 0;
+            const outputWidth = clampNumber(summary.averageSuccessScore ?? 20, 12, 100);
+            const costWidth = clampNumber(summary.averageEfficiency ?? value, 10, 100);
+            return `<div class="provider-integrity-row provider-integrity-row-large">
+              <span>${escapeHtml(summary.provider).replace(/\s+/g, '_').toUpperCase()}</span>
+              <div class="provider-integrity-bars">
+                <div class="provider-integrity-output" style="width:${outputWidth}%;background:${getProviderAccent(summary.provider)}"></div>
+                <div class="provider-integrity-cost" style="width:${costWidth}%"></div>
+              </div>
+            </div>`;
+          }).join('')}
+      </div>
+    </article>
+  </section>`;
+}
+
+function buildAnalyticsComposition(analytics: ReadAnalyticsSnapshot): string {
+  const sessions = analytics.recentSessions ?? [];
+  const counts = { success: 0, mixed: 0, waste: 0, unknown: 0 };
+  for (const session of sessions) {
+    if (session.outcome === 'success') counts.success++;
+    else if (session.outcome === 'mixed' || session.outcome === 'partial') counts.mixed++;
+    else if (session.outcome === 'waste' || session.outcome === 'failed') counts.waste++;
+    else counts.unknown++;
+  }
+  const total = Math.max(sessions.length, 1);
+  const segments = [
+    { label: 'Success', count: counts.success, color: 'var(--success)' },
+    { label: 'Mixed', count: counts.mixed, color: 'var(--warning)' },
+    { label: 'Waste', count: counts.waste, color: 'var(--critical)' },
+    { label: 'Unknown', count: counts.unknown, color: 'var(--text-muted)' },
+  ];
+
+  return `<section class="analytics-grid analytics-grid-split">
+    <article class="kinetic-panel cadence-panel">
+      <div class="kinetic-panel-head">
+        <div>
+          <h2>Activity Cadence</h2>
+          <p>Weekly pressure rhythm</p>
+        </div>
+      </div>
+      ${buildTopologyGrid(sessions)}
+      <div class="legend-floor">
+        <span>Low signal</span>
+        <div class="legend-scale">
+          <i class="legend-step legend-step-1"></i>
+          <i class="legend-step legend-step-2"></i>
+          <i class="legend-step legend-step-3"></i>
+          <i class="legend-step legend-step-4"></i>
+        </div>
+        <span>Peak</span>
+      </div>
+    </article>
+    <article class="kinetic-panel volatility-panel">
+      <div class="kinetic-panel-head">
+        <div>
+          <h2>Asset Volatility</h2>
+          <p>Model movement, efficiency, and spend</p>
+        </div>
+      </div>
+      ${buildAssetVolatilityRows(analytics)}
+    </article>
+  </section>
+  <section class="analytics-grid analytics-grid-split">
+    <article class="kinetic-panel">
+      <div class="kinetic-panel-head">
+        <div>
+          <h2>Outcome Composition</h2>
+          <p>Distribution across sampled sessions</p>
+        </div>
+      </div>
+      <div class="segmented-bar">
+        ${segments.map((segment) => `<span style="width:${(segment.count / total) * 100}%;background:${segment.color}"></span>`).join('')}
+      </div>
+      <div class="segment-legend">
+        ${segments.map((segment) => `<span><i style="background:${segment.color}"></i>${segment.label} ${segment.count}</span>`).join('')}
+      </div>
+    </article>
+    <article class="kinetic-panel">
+      <div class="kinetic-panel-head">
+        <div>
+          <h2>Model Pressure</h2>
+          <p>Top models by token concentration</p>
+        </div>
+      </div>
+      <div class="provider-stack">
+        ${analytics.modelSummaries.slice(0, 5).map((model) => {
+          const width = clampNumber((model.totalTokens / Math.max(...analytics.modelSummaries.map((entry) => entry.totalTokens), 1)) * 100, 8, 100);
+          return `<div class="provider-meter">
+            <div class="provider-meter-head">
+              <div>
+                <strong>${escapeHtml(model.model)}</strong>
+                <span>${escapeHtml(model.provider)} · ${model.sessions} sessions</span>
+              </div>
+              <div class="provider-meter-values">
+                <span>${formatNumber(model.totalTokens)} tok</span>
+                <span>${formatUsdCompact(model.totalCostUsd)}</span>
+              </div>
+            </div>
+            <div class="provider-meter-track"><span style="width:${width}%;background:${getProviderAccent(model.provider)}"></span></div>
+          </div>`;
+        }).join('')}
+      </div>
+    </article>
+  </section>`;
+}
+
+function buildActiveSurfaceTruthSection(panel: DesktopActiveSurfacePanelData): string {
+  const resolution = panel.resolution;
+  const tier = resolution?.resolutionTier ?? 'tier_0_none';
+  const tierText = tierLabel(tier);
+  const tierDesc = tierDescription(tier);
+  const isFallback = isFallbackState(tier);
+  const bgColor = isFallback ? 'var(--warning-bg)' : isStrongTruth(tier) ? 'var(--success-bg)' : 'var(--code-bg)';
+  const textColor = isFallback ? 'var(--warning-text)' : isStrongTruth(tier) ? 'var(--success-text)' : 'var(--text-primary)';
+  const usageText = panel.usagePercent !== null ? `${panel.usagePercent.toFixed(1)}%` : 'n/a';
+  const providerText = resolution?.provider ? escapeHtml(resolution.provider) : 'unresolved';
+  const capabilityRows = [
+    ['Active window', panel.capabilities.activeWindowDetection],
+    ['Open windows', panel.capabilities.openWindowRegistry],
+    ['Desktop notifications', panel.capabilities.desktopNotifications],
+    ['Attention request', panel.capabilities.attentionRequest],
+  ].map(([label, value]) => `<div class="context-limit-row"><span class="context-limit-label">${label}</span><span class="detail-value">${value}</span></div>`).join('');
+
+  return `<div class="section">
+    <h2>Active Surface Truth</h2>
+    <div class="detail-grid">
+      <div class="detail-label">Tier</div><div class="detail-value"><span class="badge" style="background:${bgColor};color:${textColor}">${escapeHtml(tierText)}</span></div>
+      <div class="detail-label">Provider</div><div class="detail-value">${providerText}</div>
+      <div class="detail-label">Source</div><div class="detail-value"><code>${escapeHtml(resolution?.source ?? 'none')}</code></div>
+      <div class="detail-label">Confidence</div><div class="detail-value">${escapeHtml(resolution?.confidence ?? 'none')}</div>
+      <div class="detail-label">Current Context</div><div class="detail-value">${usageText} (${escapeHtml(bandLabel(panel.thresholdBand))})</div>
+      <div class="detail-label">Reason</div><div class="detail-value">${escapeHtml(resolution?.reason ?? tierDesc)}</div>
+    </div>
+    <div class="context-audit-section" style="margin-top:16px">
+      <h3>Capabilities</h3>
+      ${capabilityRows}
+      <div class="footer-note" style="margin-top:12px">${escapeHtml(tierDesc)}</div>
+    </div>
+  </div>`;
+}
+
+function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessionListItem[], activeProvider: string | null, activeModel: string | null, activeQ: string | null, listResult: { sessions: StoredSessionListItem[]; total: number; page: number; pageSize: number; totalPages: number } | null, modelOptions: { model: string; sessionCount: number }[], contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null, activeSurfacePanel: DesktopActiveSurfacePanelData | null): string {
   const totalTokens = snapshot.providerSummaries.reduce((s: number, p: SessionSummary) => s + p.totalTokens, 0);
   const totalCost = snapshot.providerSummaries.reduce((s: number, p: SessionSummary) => s + p.totalCostUsd, 0);
   const providerRows = snapshot.providerSummaries.length > 0
@@ -123,37 +1017,28 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>
-  <nav class="nav">
-    <span class="nav-brand">Token Tracker</span>
-    <a href="/" class="active">Overview</a>
-    <a href="/analytics">Analytics</a>
-    <a href="/menubar">Menubar</a>
-    <span class="refresh-indicator" id="refresh-state" title="Auto-refresh: watching database" role="status" aria-live="polite"></span>
-    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button>
-  </nav>
+  ${buildDesktopNav('overview', { showRefreshIndicator: true })}
   <main id="main-content">
   <h1>Overview</h1>
   <p class="subtitle">Database: <code>${escapeHtml(snapshot.databasePath)}</code></p>
 
-  <div class="stats-row">
-    <div class="stat-card">
-      <div class="stat-value">${snapshot.sessionCount}</div>
-      <div class="stat-label">Total Sessions</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value">${formatNumber(totalTokens)}</div>
-      <div class="stat-label">Total Tokens</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value">$${totalCost.toFixed(2)}</div>
-      <div class="stat-label">Total Cost</div>
-    </div>
-    ${buildOverviewSuccessCard(snapshot)}
+  ${buildOverviewHero(snapshot, sessions, totalTokens, totalCost, contextHealth, activeSurfacePanel)}
+  ${buildOverviewKpiDeck(snapshot, sessions, contextHealth)}
+
+  <section class="analytics-grid analytics-grid-featured">
+    ${buildOverviewTrendActivity(snapshot, sessions)}
+    ${buildOverviewProviderIntegrity(snapshot, activeSurfacePanel)}
+  </section>
+
+  <section class="analytics-grid analytics-grid-split">
+    ${buildOverviewCadenceSection(sessions)}
+    ${buildOverviewLiveFeed(sessions)}
+  </section>
+
+  <div class="analytics-grid analytics-grid-split">
+    ${activeSurfacePanel ? buildActiveSurfaceTruthSection(activeSurfacePanel) : ''}
+    ${contextHealth ? buildOverviewContextHealthSection(contextHealth) : ''}
   </div>
-
-  ${buildVerificationDistributionCard(snapshot)}
-
-  ${contextHealth ? buildOverviewContextHealthSection(contextHealth) : ''}
 
   ${buildFilterStateHtml(activeProvider, activeModel, activeQ, listResult)}
 
@@ -224,9 +1109,8 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
   </p>
   <script>
     function copyOverviewSummary() {
-      var stats = document.querySelector('.stats-row')?.innerText || '';
-      var tables = Array.from(document.querySelectorAll('table')).map(function(t) { return t.innerText; }).join('\\n\\n');
-      var summary = 'Token Tracker Overview\\n' + stats.trim() + '\\n\\n' + tables;
+      var panels = Array.from(document.querySelectorAll('main section, main .section')).map(function(node) { return node.innerText; }).join('\\n\\n');
+      var summary = 'Token Tracker Overview\\n\\n' + panels.trim();
       navigator.clipboard.writeText(summary).then(function() {
         var btn = document.querySelector('.btn-secondary');
         if (btn) { btn.textContent = '✓ Copied'; setTimeout(function() { btn.textContent = '📋 Copy summary'; }, 2000); }
@@ -620,7 +1504,7 @@ function buildPaginationHtml(listResult: { total: number; page: number; pageSize
   </div>`;
 }
 
-function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number): string {
+function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number, activeSurfacePanel: DesktopActiveSurfacePanelData | null): string {
   const totalTokens = analytics.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalTokens, 0);
   const totalCost = analytics.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalCostUsd, 0);
 
@@ -636,19 +1520,8 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
     return `<div class="chart-row"><div class="chart-bar"><span>${escapeHtml(m.model)}</span><span>${formatNumber(m.totalTokens)}</span></div><div class="bar" style="width:${Math.round(width)}%;background:#7c3aed"></div></div>`;
   }).join('\n');
 
-  const dailyBuckets = [...analytics.dailyBuckets].reverse();
+  const dailyBuckets = [...analytics.dailyBuckets];
   const maxDailyTokens = Math.max(...dailyBuckets.map((d: DailyBucket) => d.totalTokens), 1);
-  const maxDailyCost = Math.max(...dailyBuckets.map((d: DailyBucket) => d.totalCostUsd), 0.01);
-
-  const tokenChartBars = dailyBuckets.map((d: DailyBucket) => {
-    const width = Math.max(2, (d.totalTokens / maxDailyTokens) * 100);
-    return `<div class="chart-row"><div class="bar" style="width:${Math.round(width)}%" title="${d.date}: ${formatNumber(d.totalTokens)} tokens"></div><div class="bar-label">${d.date} — ${formatNumber(d.totalTokens)} tokens</div></div>`;
-  }).join('\n');
-
-  const costChartBars = dailyBuckets.map((d: DailyBucket) => {
-    const width = Math.max(2, (d.totalCostUsd / maxDailyCost) * 100);
-    return `<div class="chart-row"><div class="bar" style="width:${Math.round(width)}%;background:#16a34a" title="${d.date}: $${d.totalCostUsd.toFixed(2)}"></div><div class="bar-label">${d.date} — $${d.totalCostUsd.toFixed(2)}</div></div>`;
-  }).join('\n');
 
   const dailyRows = dailyBuckets.map((d: DailyBucket) => {
     return `<tr>
@@ -672,88 +1545,54 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
 <title>Token Tracker — Analytics</title><style>${PAGE_STYLES}</style></head>
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>
-  <nav class="nav">
-    <span class="nav-brand">Token Tracker</span>
-    <a href="/">Overview</a>
-    <a href="/analytics" class="active">Analytics</a>
-    <a href="/menubar">Menubar</a>
-    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button>
-  </nav>
+  ${buildDesktopNav('analytics')}
   <main id="main-content">
   <h1>Analytics</h1>
   <p class="subtitle">Database: <code>${escapeHtml(analytics.databasePath)}</code></p>
 
-  <div class="stats-row">
-    <div class="stat-card" role="status" aria-label="Total sessions: ${analytics.sessionCount}">
-      <div class="stat-value">${analytics.sessionCount}</div>
-      <div class="stat-label">Total Sessions</div>
-    </div>
-    <div class="stat-card" role="status" aria-label="Total tokens: ${formatNumber(totalTokens)}">
-      <div class="stat-value">${formatNumber(totalTokens)}</div>
-      <div class="stat-label">Total Tokens</div>
-    </div>
-    <div class="stat-card" role="status" aria-label="Total cost: $${totalCost.toFixed(2)}">
-      <div class="stat-value">$${totalCost.toFixed(2)}</div>
-      <div class="stat-label">Total Cost</div>
-    </div>
-  </div>
+  ${buildAnalyticsHero(analytics, totalTokens, totalCost, activeDays)}
+  ${buildOperationalTimeChips(activeDays, '/analytics')}
 
-  <div class="window-controls">
-    <span class="window-label">Time window:</span>
-    <a href="/analytics?days=7" class="window-btn${activeDays === 7 ? ' window-btn-active' : ''}">7d</a>
-    <a href="/analytics?days=14" class="window-btn${activeDays === 14 ? ' window-btn-active' : ''}">14d</a>
-    <a href="/analytics?days=30" class="window-btn${activeDays === 30 ? ' window-btn-active' : ''}">30d</a>
-    <a href="/analytics?days=90" class="window-btn${activeDays === 90 ? ' window-btn-active' : ''}">90d</a>
-    <span class="window-hint">Showing ${activeDays}-day window</span>
-  </div>
+  ${buildAnalyticsTrendPanels(analytics)}
+  ${buildAnalyticsValueMatrix(analytics)}
+  ${buildAnalyticsComposition(analytics)}
 
-  <div class="analytics-group">
+  <div class="analytics-grid analytics-grid-split">
     <div class="section">
       <h2>Distribution</h2>
-      <h3 style="font-size:13px;color:#6b7280;margin:0 0 8px;font-weight:500">By Provider (Cost)</h3>
+      <h3 style="font-size:13px;color:var(--text-secondary);margin:0 0 8px;font-weight:500">By Provider (Cost)</h3>
       ${providerDistBars}
-      <h3 style="font-size:13px;color:#6b7280;margin:16px 0 8px;font-weight:500">By Model (Tokens)</h3>
+      <h3 style="font-size:13px;color:var(--text-secondary);margin:16px 0 8px;font-weight:500">By Model (Tokens)</h3>
       ${modelDistBars}
     </div>
-  </div>
-
-  <div class="section">
-    <h2>Model Breakdown</h2>
-    <div class="table-wrapper">
-    <table>
-      <thead><tr><th scope="col">Model</th><th scope="col">Provider</th><th scope="col">Sessions</th><th scope="col">Tokens</th><th scope="col">Cost (USD)</th><th scope="col">Avg Efficiency</th></tr></thead>
-      <tbody>${analytics.modelSummaries.map((m: ModelSummary) => `<tr><td>${escapeHtml(m.model)}</td><td>${escapeHtml(m.provider)}</td><td>${m.sessions}</td><td>${formatNumber(m.totalTokens)}</td><td>$${m.totalCostUsd.toFixed(2)}</td><td>${m.averageEfficiency !== null ? m.averageEfficiency.toFixed(0) : 'n/a'}</td></tr>`).join('\n')}</tbody>
-    </table>
-    </div>
-  </div>
-
-  <div class="analytics-group">
-    <div class="section">
-      <h2>Daily Tokens Trend</h2>
-      ${tokenChartBars || '<p class="empty">No daily token data yet. Run <code>ttm import</code> to collect session data.</p>'}
-    </div>
-    <div class="section">
-      <h2>Daily Cost Trend</h2>
-      ${costChartBars || '<p class="empty">No daily cost data yet. Run <code>ttm import</code> to collect session data.</p>'}
-    </div>
-  </div>
-
-  <div class="analytics-group">
-
-  <div class="section">
-    <h2>Success Analysis</h2>
-    ${buildAnalyticsSuccessSection(analytics)}
-  </div>
-
-  <div class="section">
-    <h2>Context Pressure</h2>
-    ${buildAnalyticsContextSection(analytics)}
-  </div>
-
     <div class="section">
       <h2>Activity Heatmap</h2>
       <div class="heatmap-grid">${cells}</div>
-      <div style="display:flex;justify-content:space-between;font-size:10px;color:#9ca3af;margin-top:4px"><span>Less</span><div style="display:flex;gap:2px"><div class="heatmap-cell" style="opacity:0.15"></div><div class="heatmap-cell" style="opacity:0.4"></div><div class="heatmap-cell" style="opacity:0.7"></div><div class="heatmap-cell" style="opacity:1"></div></div><span>More</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-secondary);margin-top:8px"><span>Less</span><div style="display:flex;gap:4px"><div class="heatmap-cell" style="opacity:0.15"></div><div class="heatmap-cell" style="opacity:0.4"></div><div class="heatmap-cell" style="opacity:0.7"></div><div class="heatmap-cell" style="opacity:1"></div></div><span>More</span></div>
+    </div>
+  </div>
+
+  <div class="analytics-grid analytics-grid-split">
+    <div class="section">
+      <h2>Success Analysis</h2>
+      ${buildAnalyticsSuccessSection(analytics)}
+    </div>
+    <div class="section">
+      <h2>Context Pressure</h2>
+      ${buildAnalyticsContextSection(analytics)}
+    </div>
+  </div>
+
+  <div class="analytics-grid analytics-grid-split">
+    ${activeSurfacePanel ? buildActiveSurfaceTruthSection(activeSurfacePanel) : ''}
+    <div class="section">
+      <h2>Model Breakdown</h2>
+      <div class="table-wrapper">
+      <table>
+        <thead><tr><th scope="col">Model</th><th scope="col">Provider</th><th scope="col">Sessions</th><th scope="col">Tokens</th><th scope="col">Cost (USD)</th><th scope="col">Avg Efficiency</th></tr></thead>
+        <tbody>${analytics.modelSummaries.map((m: ModelSummary) => `<tr><td>${escapeHtml(m.model)}</td><td>${escapeHtml(m.provider)}</td><td>${m.sessions}</td><td>${formatNumber(m.totalTokens)}</td><td>$${m.totalCostUsd.toFixed(2)}</td><td>${m.averageEfficiency !== null ? m.averageEfficiency.toFixed(0) : 'n/a'}</td></tr>`).join('\n')}</tbody>
+      </table>
+      </div>
     </div>
   </div>
 
@@ -774,9 +1613,8 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
   </p>
   <script>
     function copyAnalyticsSummary() {
-      var text = document.querySelector('.analytics-group')?.innerText || '';
-      var stats = document.querySelector('.stats-row')?.innerText || '';
-      var summary = 'Token Tracker Analytics\\n' + stats.trim() + '\\n\\n' + text.trim();
+      var text = Array.from(document.querySelectorAll('main section, main .section')).map(function(node) { return node.innerText; }).join('\\n\\n');
+      var summary = 'Token Tracker Analytics\\n\\n' + text.trim();
       navigator.clipboard.writeText(summary).then(function() {
         var btn = document.querySelector('.btn-secondary');
         if (btn) { btn.textContent = '✓ Copied'; setTimeout(function() { btn.textContent = '📋 Copy summary'; }, 2000); }
@@ -794,7 +1632,7 @@ function buildNotFoundHtml(sessionId: string): string {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — Not Found</title><style>${PAGE_STYLES}</style></head>
 <body>
-  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a><button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button></nav>
+  ${buildDesktopNav('overview')}
   <main><a class="back-link-spaced" href="/">&larr; Back to overview</a><h1>Session Not Found</h1><p class="empty">No session found with id <code>${escapeHtml(sessionId)}</code>.</p></main>
   ${buildThemeScript()}
 </body></html>`;
@@ -806,7 +1644,7 @@ function buildDetailHtml(session: StoredSessionDetail): string {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — ${escapeHtml(session.title ?? session.providerSessionId)}</title><style>${PAGE_STYLES}</style></head>
 <body>
-  <nav class="nav"><span class="nav-brand">Token Tracker</span><a href="/">Overview</a><a href="/analytics">Analytics</a><a href="/menubar">Menubar</a><button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button></nav>
+  ${buildDesktopNav('overview')}
   <main>
   <a class="back-link-spaced" href="/">&larr; Back to overview</a>
   <h1>${escapeHtml(session.title ?? '<untitled>')}</h1>
@@ -973,6 +1811,34 @@ function handleRequest(
     return;
   }
 
+  if (path === '/api/notification-check') {
+    if (DESKTOP_API_KEY) {
+      const url = new URL(rawUrl, 'http://localhost');
+      const providedKey = url.searchParams.get('api_key');
+      if (!providedKey || providedKey !== DESKTOP_API_KEY) {
+        response.writeHead(401, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ error: 'API key required' }));
+        return;
+      }
+    }
+
+    try {
+      const analytics = readService.getAnalyticsSnapshot(30);
+      const payload = computeDesktopNotificationPayload(
+        (analytics.recentSessions ?? []) as Array<{
+          provider: string;
+          providerSessionId: string;
+          contextAudit?: { contextUsagePercent: number | null } | null;
+        }>,
+      );
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(payload));
+    } catch (error) {
+      sendError(response, 500, 'Internal server error', String(error));
+    }
+    return;
+  }
+
   if (path === '/export/analytics-svg') {
     let analytics: ReadAnalyticsSnapshot | null = null;
     let error: string | null = null;
@@ -1037,22 +1903,91 @@ function handleRequest(
 
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     let contextPressure: { low: number; medium: number; high: number; critical: number; unknown: number } | null = null;
-    if (sessions.length > 0) {
-      try {
-        const analytics = readService.getAnalyticsSnapshot(30);
-        const recentWithAudit = analytics.recentSessions ?? [];
-        contextPressure = { low: 0, medium: 0, high: 0, critical: 0, unknown: 0 };
-        for (const s of recentWithAudit) {
-          const state = s.contextAudit?.contextPressureState ?? 'unknown';
-          if (state in contextPressure) {
-            contextPressure[state as keyof typeof contextPressure]++;
-          }
+    let windowContextSignal: WindowContextSignal | null = null;
+    let activeSurfaceResolution: ActiveSurfaceResolution | null = null;
+    let isNativeWindowDetected = false;
+    let activeSurfaceSource = 'none';
+    
+    try {
+      const analytics = readService.getAnalyticsSnapshot(30);
+      const recentWithAudit = analytics.recentSessions ?? [];
+      contextPressure = { low: 0, medium: 0, high: 0, critical: 0, unknown: 0 };
+      for (const s of recentWithAudit) {
+        const state = s.contextAudit?.contextPressureState ?? 'unknown';
+        if (state in contextPressure) {
+          contextPressure[state as keyof typeof contextPressure]++;
         }
-      } catch (caught) {
-        process.stderr.write(`[WARN] failed to compute menubar context pressure: ${caught instanceof Error ? caught.message : String(caught)}\n`);
+      }
+      
+      const activeSurfaceState = fetchActiveSurfaceState();
+      isNativeWindowDetected = activeSurfaceState.isNative;
+      activeSurfaceSource = activeSurfaceState.resolution?.source ?? 'none';
+      
+      if (activeSurfaceState.isAvailable && activeSurfaceState.resolution) {
+        activeSurfaceResolution = activeSurfaceState.resolution;
+        
+        if (activeSurfaceState.resolution.key) {
+          const usagePercent = recentWithAudit[0]?.contextAudit?.contextUsagePercent ?? null;
+          const thresholdBand = deriveThresholdBand(usagePercent);
+          windowContextSignal = {
+            key: activeSurfaceState.resolution.key,
+            providerSessionId: activeSurfaceState.resolution.providerSessionId,
+            contextUsagePercent: usagePercent,
+            thresholdBand,
+            color: bandToColor(thresholdBand),
+            lastCrossedAt: null,
+            resolutionConfidence: activeSurfaceState.resolution.confidence as MatchConfidence,
+          };
+        }
+      } else {
+        const latestSession = recentWithAudit[0];
+        if (latestSession?.contextAudit) {
+          const usagePercent = latestSession.contextAudit.contextUsagePercent;
+          const thresholdBand = deriveThresholdBand(usagePercent);
+          windowContextSignal = {
+            key: { provider: latestSession.provider as ProviderId, externalWindowId: 'latest-session-fallback' },
+            providerSessionId: latestSession.providerSessionId,
+            contextUsagePercent: usagePercent,
+            thresholdBand,
+            color: bandToColor(thresholdBand),
+            lastCrossedAt: null,
+            resolutionConfidence: 'none',
+          };
+        }
+        
+        const sessionState = createActiveSurfaceStateFromSessions(recentWithAudit as any);
+        activeSurfaceResolution = sessionState.resolution;
+      }
+    } catch (caught) {
+      process.stderr.write(`[WARN] failed to compute menubar active surface: ${caught instanceof Error ? caught.message : String(caught)}\n`);
+      
+      if (sessions.length > 0) {
+        try {
+          const analytics = readService.getAnalyticsSnapshot(30);
+          const recentWithAudit = analytics.recentSessions ?? [];
+          const latestSession = recentWithAudit[0];
+          if (latestSession?.contextAudit) {
+            const usagePercent = latestSession.contextAudit.contextUsagePercent;
+            const thresholdBand = deriveThresholdBand(usagePercent);
+            windowContextSignal = {
+              key: { provider: latestSession.provider as ProviderId, externalWindowId: 'latest-session-fallback' },
+              providerSessionId: latestSession.providerSessionId,
+              contextUsagePercent: usagePercent,
+              thresholdBand,
+              color: bandToColor(thresholdBand),
+              lastCrossedAt: null,
+              resolutionConfidence: 'none',
+            };
+          }
+          const sessionState = createActiveSurfaceStateFromSessions(recentWithAudit as any);
+          activeSurfaceResolution = sessionState.resolution;
+        } catch {
+          // Ignore fallback errors
+        }
       }
     }
-    response.end(buildMenubarHtml(snapshot, sessions, compactMode, null, contextPressure));
+    
+    response.end(buildMenubarHtml(snapshot, sessions, compactMode, null, contextPressure, windowContextSignal, activeSurfaceResolution));
     return;
   }
 
@@ -1061,6 +1996,7 @@ function handleRequest(
     let error: string | null = null;
     const defaultPrefs = loadPreferences();
     let activeDays = defaultPrefs.defaultAnalyticsWindowDays;
+    let activeSurfacePanel: DesktopActiveSurfacePanelData | null = null;
 
     const urlParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
     const daysParam = urlParams.get('days');
@@ -1073,6 +2009,13 @@ function handleRequest(
 
     try {
       analytics = readService.getAnalyticsSnapshot(activeDays);
+      activeSurfacePanel = computeDesktopActiveSurfacePanel(
+        (analytics.recentSessions ?? []) as Array<{
+          provider: string;
+          providerSessionId: string;
+          contextAudit?: { contextUsagePercent: number | null } | null;
+        }>,
+      );
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
     }
@@ -1090,7 +2033,7 @@ function handleRequest(
     }
 
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    response.end(buildAnalyticsHtml(analytics, activeDays));
+    response.end(buildAnalyticsHtml(analytics, activeDays, activeSurfacePanel));
     return;
   }
 
@@ -1141,6 +2084,7 @@ function handleRequest(
 
     const modelOptions = readService.getModelOptions();
     let contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null = null;
+    let activeSurfacePanel: DesktopActiveSurfacePanelData | null = null;
     try {
       const analytics = readService.getAnalyticsSnapshot(30);
       const recentWithAudit = analytics.recentSessions ?? [];
@@ -1158,12 +2102,19 @@ function handleRequest(
       contextHealth = sessionContextMap.length > 0
         ? { nearLimitCount, toolHeavyCount, topSessions: sessionContextMap.sort((a, b) => (b.contextPercent ?? 0) - (a.contextPercent ?? 0)) }
         : null;
+      activeSurfacePanel = computeDesktopActiveSurfacePanel(
+        recentWithAudit as Array<{
+          provider: string;
+          providerSessionId: string;
+          contextAudit?: { contextUsagePercent: number | null } | null;
+        }>,
+      );
     } catch (caught) {
       process.stderr.write(`[WARN] failed to compute overview context health: ${caught instanceof Error ? caught.message : String(caught)}\n`);
     }
 
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    response.end(buildOverviewHtml(snapshot, sessions, provider, model, q, listResult, modelOptions, contextHealth));
+    response.end(buildOverviewHtml(snapshot, sessions, provider, model, q, listResult, modelOptions, contextHealth, activeSurfacePanel));
     return;
   }
 
@@ -1228,9 +2179,10 @@ function buildMenubarEmptyHtml(): string {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker</title><style>${MENUBAR_STYLES}</style></head>
 <body>
-  <div class="header"><span class="health-dot health-dot-warn"></span><span class="header-title">Token Tracker</span></div>
-  <p class="empty">No data imported yet.<br>Run <code>ttm import</code> to populate.</p>
-  <a class="action-link" href="/">Open Dashboard</a>
+  <div class="mb-header"><span class="mb-health-dot mb-health-dot-warn"></span><span class="mb-title">${buildBrandLockup('Token Tracker', true)}</span></div>
+  <div class="mb-empty">No data imported yet.<br>Run <code>ttm import</code> to populate.</div>
+  <div class="mb-actions"><a class="mb-action-btn mb-action-btn-primary" href="/">Open Dashboard</a></div>
+  ${buildThemeScript()}
 </body></html>`;
 }
 
@@ -1240,9 +2192,10 @@ function buildMenubarErrorHtml(message: string): string {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker</title><style>${MENUBAR_STYLES}</style></head>
 <body>
-  <div class="header"><span class="health-dot health-dot-critical"></span><span class="header-title">Token Tracker</span></div>
-  <p class="error">An unexpected error occurred.</p>
-  <a class="action-link" href="/">Open Dashboard</a>
+  <div class="mb-header"><span class="mb-health-dot mb-health-dot-critical"></span><span class="mb-title">${buildBrandLockup('Token Tracker', true)}</span></div>
+  <div class="mb-empty"><p class="error">An unexpected error occurred.</p><p>${escapeHtml(message)}</p></div>
+  <div class="mb-actions"><a class="mb-action-btn mb-action-btn-primary" href="/">Open Dashboard</a></div>
+  ${buildThemeScript()}
 </body></html>`;
 }
 

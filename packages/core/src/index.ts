@@ -1,3 +1,4 @@
+export * from './adapters/claude.js';
 export * from './adapters/codex.js';
 export * from './adapters/opencode.js';
 export * from './adapters/types.js';
@@ -11,6 +12,9 @@ export * from './db/types.js';
 export * from './domain/comparison.js';
 export * from './domain/context-audit.js';
 export * from './domain/session.js';
+export * from './domain/window-context.js';
+export * from './domain/window-matchers.js';
+export * from './domain/active-surface.js';
 export * from './leaderboard/types.js';
 export * from './pricing/static-pricing.js';
 export * from './utils/hash.js';

@@ -13,7 +13,7 @@ It uses the same status vocabulary as `packages/core/src/adapters/types.ts`
 | **Codex** | ✅ Yes | ✅ `~/.codex/sessions/*.jsonl` | ✅ Rate limit data embedded in session JSONL | `validated` | Fully validated and shipped |
 | **OpenCode** | ✅ Yes | ✅ `~/.local/share/opencode/opencode.db` (SQLite) | ❌ No quota data in source | `validated` | Fully validated and shipped; no quota data available from source |
 | **Cursor** | ❌ No | ⚠️ Partial investigation — some local data found but insufficient for implementation | ❌ No validated usage/quota/session API | `strategy_pending` | Auth token accessible locally but no usage/quota/session API surface found. Cursor uses undocumented gRPC; no service definitions available. |
-| **Claude** | ❌ No | ❌ No validated local session source | ❌ No validated local session source | `unavailable` | No validated local session source has been established. |
+| **Claude** | ✅ Yes | ✅ `~/.claude/projects/*.jsonl` | ❌ No quota data in source | `validated` | Local JSONL import implemented (Phase 011); no quota/reset data available from source |
 
 ## Status Definitions
 
@@ -40,7 +40,7 @@ These notes summarize what has been investigated so far. They are historical con
 
 **Cursor**: Investigation found an auth token in Cursor's local state database, but no usage, quota, or session API surface was discovered. Cursor appears to use gRPC for its API; no `.proto` service definitions were found in the app bundle. The gRPC schema remains undocumented.
 
-**Claude**: Investigation found no local session database or structured export format. Only plugin skill-injection logs were found, which are not suitable for session analytics.
+**Claude**: Phase 011 validated local session source at `~/.claude/projects/*.jsonl`. Adapter implemented in Phase 011. No quota/reset data available from source - only token/cost from usage blocks in JSONL.
 
 ## Parity vs Reference Products (Provider Breadth)
 
@@ -48,7 +48,7 @@ These notes summarize what has been investigated so far. They are historical con
 |---|---|---|
 | AI Token Monitor | Claude + Codex (2) | ✅ Both |
 | CodexBar | 16+ | ✅ Most |
-| Token Tracker | Codex + OpenCode (2) | ⚠️ Codex only |
+| Token Tracker | Codex + OpenCode + Claude (3) | ⚠️ Codex only |
 
 Token Tracker trails both reference products on provider breadth and quota meter coverage. This is documented honestly in `docs/reference-products.md`.
 
@@ -57,7 +57,7 @@ Token Tracker trails both reference products on provider breadth and quota meter
 | Provider | What Would Change Status |
 |---|---|
 | Cursor | Discovery of Cursor's gRPC service definitions (`.proto` files) OR a documented REST API for usage/quota data |
-| Claude | Discovery of a local session format with parseable session/token/cost data |
+| Claude | Discovery of a local session format with parseable session/token/cost data | → DONE (Phase 011: ~/.claude/projects/*.jsonl) |
 | Gemini | Investigation has not been performed |
 | Copilot | Investigation has not been performed |
 

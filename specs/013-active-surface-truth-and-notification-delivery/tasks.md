@@ -1,0 +1,26 @@
+# Tasks: Active-Surface Truth And Notification Delivery
+
+- [x] S001 Start with `agent-pilot` and `agent-orchestrator` to split ownership across watcher infrastructure, resolver design, UI truth states, and verification
+- [x] S002 Read the Phase 013 research note and the existing Phase 012 spec/code before implementation
+- [x] S003 Define capability matrix types and resolution tiers in the shared domain layer
+- [x] S004 Add user-facing fallback semantics so latest-session data is no longer mislabeled as active-window truth
+- [x] S005 Implement or validate a native active-window watcher in the Tauri/Rust layer
+- [x] S006 Implement or validate an open-window snapshot/registry path for inactive provider windows
+- [x] S007 Normalize watcher outputs into shared `ExternalWindowSnapshot` and registry models
+- [ ] S008 Implement provider activity correlation against local Codex and OpenCode session data
+- [x] S009 Add a final `ActiveSurfaceResolution` model with tier, source, confidence, and reason
+- [x] S010 Maintain per-window registry state and stale-window cleanup
+- [ ] S011 Add active-surface spans or equivalent change-tracking for debugging and verification
+- [ ] S012 Define and wire browser URL enrichment capability/state, implementing only where validated
+- [ ] S012a Define an opt-in browser extension/native-messaging contract for future browser-hosted provider truth
+- [x] S013 Update menubar rendering to distinguish active truth, fallback, and unavailable states
+- [x] S014 Update desktop app surface to show tier/source/capability truth
+- [x] S015 Gate threshold notifications by truth tier, capability, and focus/background state
+- [ ] S015a Use notification lifecycle APIs where available to replace or remove stale notifications for the same target key
+- [x] S016 Preserve per-window dedupe/checkpoints in the new registry model
+- [x] S017 Add tests for tier semantics, fallback labeling, and delivery gating
+- [ ] S018 Add fixture-backed tests for Codex/OpenCode multi-window correlation
+- [ ] S019 Run manual validation for at least one Codex multi-window scenario and one OpenCode multi-window scenario
+- [x] S020 Run `agent-reviewer` for correctness, regressions, and truthfulness
+- [x] S021 Run `agent-tester` for validation evidence, edge cases, and platform caveats
+- [x] S022 Run `agent-docs` to reconcile spec, research, and user-facing behavior docs

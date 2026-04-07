@@ -1,19 +1,40 @@
-# Tasks: Success Analysis And Representation
+# Tasks: Phase 009 Revisit — Visual Analytics, Dashboard Redesign, And Brand System
 
-- [ ] S001 Run `agent-orchestrator` first and define shared-core, surface, and validation ownership
-- [ ] S002 Review the Phase 009 research cornerstone before implementation starts
-- [ ] S003 Extend the canonical session model with completion, verification, confidence, and signal fields
-- [ ] S004 Create a shared evidence subsystem in the analysis layer; do not move scoring policy into adapters
-- [ ] S005 Implement Level 1 provider/session signals from existing normalized metadata
-- [ ] S006 Implement optional Level 2 local repo / git evidence collection
-- [ ] S007 Implement optional Level 3 verification-command evidence collection when detectable
-- [ ] S008 Implement score composition for `successScore`, `executionQualityScore`, `reworkScore`, `valueDensityScore`, and `analysisConfidence`
-- [ ] S009 Preserve backward-compatible population of `outcome`, `outcomeConfidence`, `efficiencyScore`, and `wasteScore`
-- [ ] S010 Update CLI outputs to include success-aware metrics, verification state, confidence, and signal explanations
-- [ ] S011 Update desktop overview to add success-quality framing and cost-vs-success representation
-- [ ] S012 Update analytics to add success funnel, verification breakdown, and rework/value-density views
-- [ ] S013 Update menubar to add a compact success cue without harming glanceability
-- [ ] S014 Update leaderboard to use aggregated success-aware metrics only, with no raw evidence exposure
-- [ ] S015 Run `agent-tester` on score composition, evidence collection, compatibility, and all-surface outputs
-- [ ] S016 Run `agent-reviewer` for regressions, privacy, and semantic honesty
-- [ ] S017 Run `agent-docs` to reconcile README and any parity or metric docs that would overclaim certainty
+- [x] R001 Start with `agent-orchestrator` and frame the revisit as a current-state planning pass, not immediate implementation
+- [x] R002 Use `agent-researcher` to gather evidence from current public dashboard, analytics, and data-visualization references
+- [x] R003 Audit the current Token Tracker Overview, Analytics, Menubar, and brand surface against the spec intent
+- [x] R004 Reconcile the historical mismatch between Phase 008 visual planning and Phase 009’s narrower implementation path
+- [x] R005 Rewrite the Phase 009 spec around the current product state and the overdue visual-analytics redesign need
+- [x] R006 Rewrite the Phase 009 plan to define workstreams for information architecture, visual system, brand, and hand-off
+- [x] R007 Rewrite the Phase 009 quickstart so it reflects current repo reality and target acceptance conditions
+- [x] R008 Rewrite the OpenCode prompt so future implementation follows the new visual-analytics direction
+- [x] R009 Prepare a Stitch prompt for:
+  - Overview
+  - Analytics
+  - Menubar alignment
+  - logo/icon board
+  - palette/type tokens
+- [x] R010 Prepare a Gemini prompt variant optimized for exploratory visual directions and logo/icon concepts
+- [ ] R011 Generate at least 2 design directions and compare them before implementation starts
+- [ ] R012 Choose a final visual direction and freeze:
+  - chart vocabulary
+  - palette
+  - type scale
+  - layout hierarchy
+  - icon/logo direction
+- [ ] R013 Slice implementation work across desktop Overview, Analytics, Menubar, and asset integration
+- [ ] R014 Implement the new visual system in desktop styles and layout primitives
+- [ ] R015 Implement redesigned Overview visuals and narrative hierarchy
+- [ ] R016 Implement redesigned Analytics visuals and comparison system
+- [ ] R017 Align Menubar visual language, iconography, and compact micro-visualizations
+- [ ] R018 Integrate final logo, app icon, and tray/menu bar icon assets
+- [ ] R019 Validate responsiveness, theme parity, and accessibility of the redesigned surfaces
+- [ ] R020 Run `agent-reviewer` for visual honesty, consistency, and regression risk
+- [ ] R021 Run `agent-tester` for build, typecheck, responsive checks, and UI verification evidence
+- [ ] R022 Run `agent-docs` to reconcile README, handoff docs, and visual-system status
+
+## Remaining Work
+
+- select a visual direction from generated concepts
+- implement the redesign across Overview, Analytics, Menubar, and brand assets
+- validate accessibility, responsiveness, and truth-state clarity after implementation

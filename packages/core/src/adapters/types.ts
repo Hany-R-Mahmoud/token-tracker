@@ -142,9 +142,9 @@ export const KNOWN_PROVIDERS: readonly ProviderStatusEntry[] = [
   },
   {
     provider: 'claude',
-    strategyStatus: 'unavailable',
+    strategyStatus: 'validated',
     incidentStatus: 'ok',
-    note: 'no validated local session source',
+    note: 'local JSONL parsed from ~/.claude/projects/*.jsonl',
     incidentNote: null,
     lastCheckedAt: null,
   },

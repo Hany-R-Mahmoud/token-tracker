@@ -1,74 +1,139 @@
-# Plan: Success Analysis And Representation
+# Plan: Phase 009 Revisit — Visual Analytics, Dashboard Redesign, And Brand System
+
+## Goal
+
+Reframe Token Tracker’s desktop and analytics experience around modern visual
+analytics, clearer monitoring hierarchy, and a coherent brand system that
+matches the richer product truth already implemented in the repo.
 
 ## Phase Path
 
-1. Lock the success-analysis model
-2. Build the evidence subsystem
-3. Extend the canonical session/domain layer
-4. Wire shared analysis outputs into all surfaces
-5. Validate compatibility and honesty
-6. Reconcile docs and handoff artifacts
+1. Audit the current product surfaces and identify visual bottlenecks
+2. Lock the visual/product principles from research
+3. Define information architecture for Overview, Analytics, and Menubar
+4. Define the brand system and chart vocabulary
+5. Prepare Stitch/Gemini prompt packages and design deliverables
+6. Translate the selected direction into implementation-ready slices
+7. Validate design honesty, readability, and accessibility
 
-## Implementation Strategy
+## Workstreams
 
-### Stage 1: Shared Model Lock
+### Workstream A: Current-State Audit
 
-- extend session domain types with completion, verification, confidence, and
-  success-signal fields
-- preserve existing `outcome`, `efficiencyScore`, and `wasteScore`
-- define a typed signal vocabulary that can grow without moving policy into
-  adapters
+- map what the Overview, Analytics, Menubar, and Team surfaces already show
+- distinguish:
+  - useful analytical content already present
+  - visually weak presentation
+  - missing comparison views
+  - missing brand assets
+- identify where the current layout is too table-heavy, card-heavy, or
+  narrative-light
 
-### Stage 2: Evidence Subsystem
+### Workstream B: Research Lock
 
-- create a shared evidence collector in `packages/core/src/analysis/`
-- derive signals from current provider metadata first
-- add optional local repo / git evidence when `projectPath` resolves inside a
-  git repo
-- add optional verification-command evidence when detectable
-- classify evidence into positive, negative, neutral, and contradictory signals
+- ground the redesign in:
+  - PostHog dashboards
+  - Vercel Analytics
+  - Plausible
+  - Grafana
+  - Metabase
+  - shadcn/ui chart examples
+  - Tremor blocks and KPI patterns
+  - USWDS and CFPB data-visualization guidance
+- convert external inspiration into repo-specific principles rather than copied
+  layouts
 
-### Stage 3: Score Composition
+### Workstream C: Information Architecture
 
-- compute:
-  - `completionState`
-  - `verificationState`
-  - `successScore`
-  - `executionQualityScore`
-  - `reworkScore`
-  - `valueDensityScore`
-  - `analysisConfidence`
-- map the old fields from the richer model instead of replacing them abruptly
+- define the exact top-to-bottom structure for:
+  - Overview
+  - Analytics
+  - Menubar
+- define what belongs in:
+  - hero
+  - KPI deck
+  - comparison zone
+  - operational truth zone
+  - investigation zone
+- ensure each screen answers “what happened”, “why it matters”, and “what next”
 
-### Stage 4: Cross-Surface Representation
+### Workstream D: Visual System
 
-- CLI gets success-aware summaries and explanations
-- overview gets success-quality framing
-- analytics gets funnel / verification / rework views
-- menubar gets compact success cue
-- leaderboard gets aggregated success-aware metrics only
+- define palette tokens for:
+  - primary signal
+  - comparison accent
+  - success
+  - warning
+  - critical
+  - unresolved / fallback
+- define typography roles
+- define surface, card, border, and spacing language
+- define chart color usage and category limits
 
-### Stage 5: Validation
+### Workstream E: Brand Assets
 
-- verify compatibility with old data
-- verify weak-evidence sessions do not show false failure
-- verify contradiction signals reduce confidence
-- verify no shared surface leaks private local evidence
+- define logo direction
+- define app icon constraints
+- define menubar/tray icon constraints
+- define how branding appears in dashboard hero and navigation
+
+### Workstream F: Design Generation Brief
+
+- prepare one or more prompts for:
+  - Stitch
+  - Gemini
+- specify required screens, variants, and output expectations
+- request multiple viable design directions, not one polished guess
+
+### Workstream G: Implementation Hand-off
+
+- convert selected design direction into implementation slices:
+  - desktop layout system
+  - chart primitives
+  - KPI card system
+  - overview composition
+  - analytics composition
+  - brand assets
+  - icon and tray polish
+
+## Recommended Execution Order
+
+1. Finish the revised spec kit
+2. Generate design concepts from Stitch or Gemini
+3. Review and choose a direction
+4. Break implementation into file-owned slices
+5. Implement Overview first
+6. Implement Analytics second
+7. Align Menubar and iconography
+8. Validate accessibility, responsiveness, and truth-state clarity
 
 ## Risks To Name Early
 
-- local git evidence may be noisy when sessions happen outside tracked repos
-- verification-command detection may be sparse or inconsistent across providers
-- over-aggressive contradiction logic could undercount useful progress
-- cross-surface rollout raises coordination cost; representation must stay simple
+- the repo contains more data layers than the current design can comfortably
+  express, so the redesign can easily become cluttered
+- over-designing the surface could make heuristic or fallback data look more
+  certain than it is
+- too many chart types would weaken implementation speed and consistency
+- strong visual ambition without brand discipline will create a “cool but random”
+  result
+- icon/logo work can drift away from the product’s local-first, technical tone
+
+## Design Quality Gates
+
+- every major screen must have a clear hierarchy within five seconds
+- every key metric must include context, comparison, or trend
+- charts must support interpretation without hover alone
+- fallback and degraded states must be visually distinct from strong-truth states
+- the system must feel like one product across dashboard, analytics, and menubar
+- the direction must be implementable in the current repo without a framework
+  rewrite
 
 ## Success Test
 
-If a user asks, "Was this spend worth it?", Token Tracker should now answer with:
+If a user opens the product after this revisit, they should feel:
 
-- a likely success judgment
-- a verification state
-- a confidence level
-- a concise explanation of what raised or lowered trust in that judgment
-
-instead of only showing token totals and cost.
+- this is more distinctive than a generic dashboard
+- I can see what changed and what matters
+- the visuals help me compare, not just read
+- the app feels premium and alive
+- uncertainty is still communicated honestly
