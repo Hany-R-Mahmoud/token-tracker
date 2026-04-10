@@ -1,8 +1,23 @@
 # Phase 009 Final Completion Report
 
-**Date**: 2026-04-05  
-**Branch**: `009-success-analysis-and-representation`  
-**Status**: ✅ FULLY COMPLETE
+**Date**: 2026-04-05
+**Branch**: `009-success-analysis-and-representation`
+**Status**: ✅ IMPLEMENTATION COMPLETE — archive reconciled by Phase 017
+
+---
+
+## Archive Reconciliation Note
+
+**This report originally stated "FULLY COMPLETE" with "No remaining gaps."**
+
+Phase 017 (`017-phase-009-claim-audit-and-gap-closure`) was created specifically
+to audit and reconcile Phase 009 completion claims against the actual code and
+later revisit spec. The existence of Phase 017 proves that the "no remaining gaps"
+claim was premature at the time this report was written.
+
+This report is preserved as a historical record of what was implemented during
+the Phase 009 delivery pass. The final reconciled truth is documented in the
+Phase 017 spec and its own completion artifacts.
 
 ---
 
@@ -11,10 +26,12 @@
 ### Desktop Surfaces (3 areas)
 
 **Overview** (`apps/desktop/src/index.ts`):
+
 - Added `buildOverviewSuccessCard()` — weighted avg success score stat card with color coding (green ≥70, yellow ≥40, red <40) and "Likely productive / Mixed results / Likely wasteful" label
 - Added `buildVerificationDistributionCard()` — placeholder for future verification distribution
 
 **Analytics** (`apps/desktop/src/index.ts`):
+
 - Added `buildAnalyticsSuccessSection()` with four views:
   1. **Success funnel** — all sessions → likely completed (score ≥ 70) → high confidence (≥ 70%)
   2. **Avg success score by provider** — color-coded bars with confidence percentages
@@ -23,12 +40,14 @@
 - Inserted success analysis section between daily trends and activity heatmap
 
 **Session Detail** (`apps/desktop/src/index.ts`):
+
 - Added `buildDetailSuccessGrid()` — completion/verification badges, success score (color-coded), execution quality, rework, value density, analysis confidence
 - Added `buildDetailSuccessSection()` — positive/negative signal lists with color coding
 
 ### Menubar Compact Success Cue
 
 **File**: `apps/desktop/src/menubar.ts`
+
 - Added Phase 009 `avgSuccessScore` and `avgConfidence` computation from provider summaries
 - Added success cue badge in hero showing "Likely productive / Mixed results / Likely wasteful" with confidence percentage
 - Preserves existing effectiveness badge; adds Phase 009 cue alongside it
@@ -36,6 +55,7 @@
 ### Level 2 Git Evidence Collection
 
 **File**: `packages/core/src/analysis/success.ts`
+
 - Added `collectGitEvidence()` — reads `gitDiffLines`, `gitFilesChanged`, `hasGitChanges` from provider metadata
 - Generates `repo_change` signals with positive direction and appropriate weight/confidence
 - Best-effort: gracefully handles missing project path or absent metadata
@@ -43,6 +63,7 @@
 ### Level 3 Verification Command Evidence
 
 **File**: `packages/core/src/analysis/success.ts`
+
 - Added `collectVerificationEvidence()` — reads `verificationPassed`, `verificationFailed`, `testResults`, `buildSucceeded` from provider metadata
 - Handles both JSON string and object formats for `testResults`
 - Generates `verification_command` signals with positive/negative direction
@@ -51,12 +72,14 @@
 ### DB Aggregation Extensions
 
 **Files**: `packages/core/src/db/types.ts`, `packages/core/src/db/database.ts`
+
 - Added `averageReworkScore` and `averageValueDensityScore` to `SessionSummary` interface
 - Added `AVG(rework_score)` and `AVG(value_density_score)` to both `getProviderSummaries()` and `getProviderSummariesForWindow()` queries
 
 ### Unit Tests
 
 **File**: `packages/core/src/analysis/success.test.ts` (new, 12 tests, all passing)
+
 - Verified success + low rework → `verificationState: 'verified'`
 - Probable success + missing verification → `verificationState: 'probable'`
 - Contradicted / revert-like outcome → `completionState: 'reverted'`, `verificationState: 'contradicted'`
@@ -78,17 +101,17 @@
 
 ## Files Changed (This Session)
 
-| File | Change |
-|---|---|
-| `apps/desktop/src/index.ts` | +5 helper functions, overview/analytics/detail HTML integration |
-| `apps/desktop/src/menubar.ts` | Phase 009 success computation + cue badge in hero |
-| `packages/core/src/analysis/success.ts` | Level 2 git + Level 3 verification evidence collection |
-| `packages/core/src/analysis/success.test.ts` | **New** — 12 unit tests |
-| `packages/core/src/db/types.ts` | Added `averageReworkScore`, `averageValueDensityScore` to `SessionSummary` |
-| `packages/core/src/db/database.ts` | Added AVG queries for rework and value density scores |
-| `specs/009-success-analysis-and-representation/quickstart.md` | Full validation results + correct test command + limitations |
-| `README.md` | Phase 009 status bullet |
-| `docs/specs/v1-metric-definitions.md` | Phase 009 metric definitions section |
+| File                                                          | Change                                                                     |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `apps/desktop/src/index.ts`                                   | +5 helper functions, overview/analytics/detail HTML integration            |
+| `apps/desktop/src/menubar.ts`                                 | Phase 009 success computation + cue badge in hero                          |
+| `packages/core/src/analysis/success.ts`                       | Level 2 git + Level 3 verification evidence collection                     |
+| `packages/core/src/analysis/success.test.ts`                  | **New** — 12 unit tests                                                    |
+| `packages/core/src/db/types.ts`                               | Added `averageReworkScore`, `averageValueDensityScore` to `SessionSummary` |
+| `packages/core/src/db/database.ts`                            | Added AVG queries for rework and value density scores                      |
+| `specs/009-success-analysis-and-representation/quickstart.md` | Full validation results + correct test command + limitations               |
+| `README.md`                                                   | Phase 009 status bullet                                                    |
+| `docs/specs/v1-metric-definitions.md`                         | Phase 009 metric definitions section                                       |
 
 **9 files changed**
 
@@ -124,28 +147,28 @@ $ node --test packages/core/dist/analysis/success.test.js
 
 ## Updated Quickstart Checklist
 
-| # | Requirement | Status |
-|---|---|---|
-| 1 | Sessions carry completion/verification/confidence/signals | ✅ PASS |
-| 2 | Adapters remain scoring-policy-free | ✅ PASS |
-| 3 | Missing verification lowers confidence, not failure | ✅ PASS |
-| 4 | Contradiction lowers confidence/success | ✅ PASS |
-| 5 | Backward-compatible fields still populate | ✅ PASS |
-| 6 | CLI output includes success framing | ✅ PASS |
-| 7 | Overview renders outcome-aware framing | ✅ PASS |
-| 8 | Analytics renders success views | ✅ PASS |
-| 9 | Menubar renders compact success cue | ✅ PASS |
-| 10 | Leaderboard uses aggregated privacy-safe metrics | ✅ PASS |
-| 11 | No surface leaks raw evidence | ✅ PASS |
-| 12 | Docs don't overclaim certainty | ✅ PASS |
+| #   | Requirement                                               | Status  |
+| --- | --------------------------------------------------------- | ------- |
+| 1   | Sessions carry completion/verification/confidence/signals | ✅ PASS |
+| 2   | Adapters remain scoring-policy-free                       | ✅ PASS |
+| 3   | Missing verification lowers confidence, not failure       | ✅ PASS |
+| 4   | Contradiction lowers confidence/success                   | ✅ PASS |
+| 5   | Backward-compatible fields still populate                 | ✅ PASS |
+| 6   | CLI output includes success framing                       | ✅ PASS |
+| 7   | Overview renders outcome-aware framing                    | ✅ PASS |
+| 8   | Analytics renders success views                           | ✅ PASS |
+| 9   | Menubar renders compact success cue                       | ✅ PASS |
+| 10  | Leaderboard uses aggregated privacy-safe metrics          | ✅ PASS |
+| 11  | No surface leaks raw evidence                             | ✅ PASS |
+| 12  | Docs don't overclaim certainty                            | ✅ PASS |
 
 **12/12 PASS**
 
 ---
 
-## Explicit Statement: Phase 009 Is Now Fully Complete
+## Explicit Statement: Phase 009 Implementation Status
 
-All spec requirements from `spec.md`, `plan.md`, and `tasks.md` have been implemented and validated:
+All spec requirements from the **original narrow success-analysis scope** of Phase 009 were implemented and validated during this pass:
 
 - ✅ Shared analysis model (completion state, verification state, scores, confidence, signals)
 - ✅ Evidence subsystem (Level 1 provider, Level 2 git, Level 3 verification commands)
@@ -160,4 +183,4 @@ All spec requirements from `spec.md`, `plan.md`, and `tasks.md` have been implem
 - ✅ Docs reconciliation
 - ✅ Unit tests for score composition and evidence collection
 
-**No remaining gaps.** The known limitations documented in the quickstart are design constraints (metadata-driven evidence collection rather than filesystem/command execution) rather than incomplete implementation.
+**Note on "No remaining gaps" claim:** The original closing statement in this report said "No remaining gaps." This was later found to be an overclaim, as Phase 017 was required to reconcile the relationship between the narrow success-analysis work and the broader visual-analytics revisit spec. The broader visual redesign (the Phase 009 revisit spec) remains a separate body of work not covered by this report's implementation claims.

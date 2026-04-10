@@ -28,12 +28,17 @@ function buildMenubarMicroBars(sessions: StoredSessionListItem[]): string {
   }).join('')}</div>`;
 }
 
-export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: StoredSessionListItem[], compactMode: 'detailed' | 'minimal' = 'detailed', myRank: { rank: number; totalMembers: number } | null = null, contextPressure: { low: number; medium: number; high: number; critical: number; unknown: number } | null = null, windowContextSignal: WindowContextSignal | null = null, activeSurfaceResolution: ActiveSurfaceResolution | null = null): string {
+export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: StoredSessionListItem[], compactMode: 'detailed' | 'minimal' = 'detailed', myRank: { rank: number; totalMembers: number } | null = null, contextPressure: { low: number; medium: number; high: number; critical: number; unknown: number } | null = null, windowContextSignal: WindowContextSignal | null = null, activeSurfaceResolution: ActiveSurfaceResolution | null = null, periodSpend: { period: string; cost: number } | null = null): string {
   const totalCost = snapshot.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalCostUsd, 0);
   const totalSessions = snapshot.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.sessions, 0);
   const totalTokens = snapshot.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalTokens, 0);
   const overallHealth = menubarOverallHealth(snapshot.providerSummaries);
   const heroMicroBars = buildMenubarMicroBars(recentSessions);
+
+  // Use period-scoped spend if provided, otherwise show all-time
+  const displayCost = periodSpend?.cost ?? totalCost;
+  const displayPeriodLabel = periodSpend?.period ?? 'all-time';
+  const allTimeCost = totalCost;
 
   // Effectiveness summary
   const providersWithEff = snapshot.providerSummaries.filter((p: SessionSummary) => p.averageEfficiency !== null);
@@ -145,8 +150,8 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
   </div>
   <div class="mb-empty">
     <div class="mb-empty-icon">📊</div>
-    <div>No data imported yet</div>
-    <div style="margin-top:4px;font-size:11px">Run <code>ttm import</code> to get started</div>
+    <div>No sessions are visible in the active local database</div>
+    <div style="margin-top:4px;font-size:11px">Run <code>ttm import</code> only if the dashboard diagnostics also show 0 sessions</div>
   </div>
   <div class="mb-actions">
     <a class="mb-action-btn mb-action-btn-primary" href="/">Dashboard</a>
@@ -170,7 +175,8 @@ export function buildMenubarHtml(snapshot: ReadSummarySnapshot, recentSessions: 
 
   <!-- 2. Hero: spend + effectiveness + success cue -->
   <div class="mb-hero">
-    <div class="mb-hero-cost">$${totalCost.toFixed(2)}</div>
+    <div class="mb-hero-cost">$${displayCost.toFixed(2)}</div>
+    <div class="mb-hero-period">${displayPeriodLabel} spend</div>
     <div class="mb-hero-meta">
       <span>${totalSessions} sessions</span>
       <span>${formatNumber(totalTokens)} tokens</span>

@@ -1,4 +1,5 @@
-import { mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { AdapterStorage, ProviderCheckpoint } from '../adapters/types.js';
@@ -16,13 +17,19 @@ import type {
   ModelOption,
   ScoreFactorRow,
 } from './types.js';
+import { periodIdToHours, type DesktopPeriodId } from './desktop-period.js';
 
 export class TtmDatabase implements AdapterStorage {
   private readonly database: DatabaseSync;
+  private readonly pathResolution: DatabasePathResolution;
 
-  public constructor(databasePath = defaultDatabasePath()) {
-    mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath);
+  public constructor(databasePath?: string) {
+    this.pathResolution = databasePath
+      ? { path: databasePath, source: 'explicit', canonicalPath: canonicalDatabasePath(), legacyPath: null, migrationPerformed: false }
+      : resolveDefaultDatabasePath();
+
+    mkdirSync(dirname(this.pathResolution.path), { recursive: true });
+    this.database = new DatabaseSync(this.pathResolution.path);
     this.database.exec('PRAGMA foreign_keys = ON');
     this.database.exec(SQLITE_SCHEMA_STATEMENTS.join(';\n'));
     this.applySchemaMigrations();
@@ -45,6 +52,10 @@ export class TtmDatabase implements AdapterStorage {
     }>;
 
     return result[0]?.file ?? '';
+  }
+
+  public get resolution(): DatabasePathResolution {
+    return this.pathResolution;
   }
 
   public async readCheckpoint(
@@ -417,6 +428,90 @@ export class TtmDatabase implements AdapterStorage {
     };
   }
 
+  /**
+   * Period-aware paginated session listing.
+   * Uses started_at window filtering based on period ID.
+   */
+  public listSessionsWithCountForPeriod(periodId: string, filters: SessionListFilters = {}): SessionListResult {
+    const hours = periodIdToHours(periodId as DesktopPeriodId);
+    const cutoffTime = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+
+    const clauses: string[] = [];
+    const values: Array<string | number> = [];
+
+    // Add period-based time filter (all-time means no filter)
+    if (periodId !== 'all') {
+      clauses.push('started_at >= ?');
+      values.push(cutoffTime);
+    }
+
+    if (filters.provider) {
+      clauses.push('provider = ?');
+      values.push(filters.provider);
+    }
+
+    if (filters.model) {
+      clauses.push('model = ?');
+      values.push(filters.model);
+    }
+
+    if (filters.priced && !filters.unpriced) {
+      clauses.push('pricing_snapshot_id IS NOT NULL');
+    }
+
+    if (filters.unpriced && !filters.priced) {
+      clauses.push('pricing_snapshot_id IS NULL');
+    }
+
+    if (filters.search) {
+      const pattern = `%${filters.search}%`;
+      clauses.push('(title LIKE ? OR provider_session_id LIKE ? OR model LIKE ?)');
+      values.push(pattern, pattern, pattern);
+    }
+
+    const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const pageSize = Math.max(1, Math.min(100, filters.pageSize ?? 20));
+    const page = Math.max(1, filters.page ?? 1);
+    const offset = (page - 1) * pageSize;
+
+    const countRow = this.database.prepare(`
+      SELECT COUNT(*) AS total FROM sessions ${whereClause}
+    `).get(...values) as { total: number };
+
+    const rows = this.database.prepare(`
+      SELECT
+        id,
+        provider,
+        provider_session_id AS providerSessionId,
+        started_at AS startedAt,
+        model,
+        token_total AS tokenTotal,
+        cost_total_usd AS costTotalUsd,
+        pricing_snapshot_id AS pricingSnapshotId,
+        efficiency_score AS efficiencyScore,
+        outcome,
+        title,
+        completion_state AS completionState,
+        verification_state AS verificationState,
+        success_score AS successScore,
+        analysis_confidence AS analysisConfidence
+      FROM sessions
+      ${whereClause}
+      ORDER BY started_at DESC
+      LIMIT ? OFFSET ?
+    `).all(...values, pageSize, offset) as unknown as StoredSessionListItem[];
+
+    const totalPages = Math.max(1, Math.ceil(countRow.total / pageSize));
+
+    return {
+      sessions: rows,
+      total: countRow.total,
+      page,
+      pageSize,
+      totalPages,
+    };
+  }
+
   public getSessionDetail(sessionId: string): StoredSessionDetail | null {
     const row = this.database.prepare(`
       SELECT
@@ -615,8 +710,25 @@ export class TtmDatabase implements AdapterStorage {
     return rows;
   }
 
+  public getHourlyBuckets(hours = 24): DailyBucket[] {
+    const rows = this.database.prepare(`
+      SELECT
+        strftime('%Y-%m-%d %H:00', started_at) AS date,
+        COUNT(*) AS sessions,
+        COALESCE(SUM(token_total), 0) AS totalTokens,
+        COALESCE(SUM(cost_total_usd), 0) AS totalCostUsd,
+        AVG(efficiency_score) AS averageEfficiency
+      FROM sessions
+      WHERE started_at >= datetime('now', ?)
+      GROUP BY strftime('%Y-%m-%d %H', started_at)
+      ORDER BY date DESC
+      LIMIT 24
+    `).all(`-${hours} hours`) as unknown as DailyBucket[];
 
-  public getSessionCountForWindow(days: number): number {
+    return rows;
+  }
+
+  public getSessionCountForWindowDays(days: number): number {
     const row = this.database.prepare(`
       SELECT COUNT(*) AS count
       FROM sessions
@@ -624,6 +736,23 @@ export class TtmDatabase implements AdapterStorage {
     `).get(`-${days} days`) as { count: number };
 
     return row.count;
+  }
+
+  public getSessionCountForWindowHours(hours: number): number {
+    const row = this.database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM sessions
+      WHERE started_at >= datetime('now', ?)
+    `).get(`-${hours} hours`) as { count: number };
+
+    return row.count;
+  }
+
+  public getSessionCountForWindow(windowHours: number): number {
+    if (windowHours <= 24) {
+      return this.getSessionCountForWindowHours(windowHours);
+    }
+    return this.getSessionCountForWindowDays(Math.ceil(windowHours / 24));
   }
 
   public getProviderSummariesForWindow(days: number): SessionSummary[] {
@@ -672,6 +801,85 @@ export class TtmDatabase implements AdapterStorage {
     `).all(`-${days} days`) as unknown as ModelSummary[];
 
     return rows;
+  }
+
+  public getProviderSummariesForWindowHours(hours: number): SessionSummary[] {
+    const rows = this.database.prepare(`
+      SELECT
+        provider,
+        COUNT(*) AS sessions,
+        COALESCE(SUM(token_total), 0) AS totalTokens,
+        COALESCE(SUM(cost_total_usd), 0) AS totalCostUsd,
+        AVG(efficiency_score) AS averageEfficiency,
+        SUM(CASE WHEN pricing_snapshot_id IS NOT NULL THEN 1 ELSE 0 END) AS pricedSessions,
+        SUM(CASE WHEN pricing_snapshot_id IS NULL THEN 1 ELSE 0 END) AS unpricedSessions,
+        MAX(reset_window_kind) AS resetWindowKind,
+        MAX(reset_window_resets_at) AS resetWindowResetsAt,
+        MAX(reset_window_remaining_percent) AS resetWindowRemainingPercent,
+        AVG(success_score) AS averageSuccessScore,
+        AVG(analysis_confidence) AS averageAnalysisConfidence,
+        AVG(rework_score) AS averageReworkScore,
+        AVG(value_density_score) AS averageValueDensityScore,
+        SUM(CASE WHEN verification_state = 'verified' THEN 1 ELSE 0 END) AS verifiedSessions,
+        SUM(CASE WHEN verification_state = 'probable' THEN 1 ELSE 0 END) AS probableSessions,
+        SUM(CASE WHEN verification_state = 'missing' THEN 1 ELSE 0 END) AS missingVerificationSessions,
+        SUM(CASE WHEN verification_state = 'contradicted' THEN 1 ELSE 0 END) AS contradictedSessions
+      FROM sessions
+      WHERE started_at >= datetime('now', ?)
+      GROUP BY provider
+      ORDER BY totalTokens DESC
+    `).all(`-${hours} hours`) as unknown as SessionSummary[];
+
+    return rows;
+  }
+
+  public getModelSummariesForWindowHours(hours: number): ModelSummary[] {
+    const rows = this.database.prepare(`
+      SELECT
+        COALESCE(model, 'unknown') AS model,
+        provider,
+        COUNT(*) AS sessions,
+        COALESCE(SUM(token_total), 0) AS totalTokens,
+        COALESCE(SUM(cost_total_usd), 0) AS totalCostUsd,
+        AVG(efficiency_score) AS averageEfficiency,
+        SUM(CASE WHEN pricing_snapshot_id IS NOT NULL THEN 1 ELSE 0 END) AS pricedSessions
+      FROM sessions
+      WHERE started_at >= datetime('now', ?)
+      GROUP BY model, provider
+      ORDER BY totalTokens DESC
+    `).all(`-${hours} hours`) as unknown as ModelSummary[];
+
+    return rows;
+  }
+
+  public listSessionsForWindowHours(hours: number, limit = 50): StoredSessionListItem[] {
+    return this.database.prepare(`
+      SELECT
+        id,
+        provider,
+        provider_session_id AS providerSessionId,
+        started_at AS startedAt,
+        model,
+        token_total AS tokenTotal,
+        token_input AS tokenInput,
+        token_output AS tokenOutput,
+        token_cached_input AS tokenCachedInput,
+        token_reasoning AS tokenReasoning,
+        cache_hit_rate AS cacheHitRate,
+        cost_total_usd AS costTotalUsd,
+        pricing_snapshot_id AS pricingSnapshotId,
+        efficiency_score AS efficiencyScore,
+        outcome,
+        title,
+        completion_state AS completionState,
+        verification_state AS verificationState,
+        success_score AS successScore,
+        analysis_confidence AS analysisConfidence
+      FROM sessions
+      WHERE started_at >= datetime('now', ?)
+      ORDER BY started_at DESC
+      LIMIT ?
+    `).all(`-${hours} hours`, limit) as unknown as StoredSessionListItem[];
   }
 
   public listSessionsForWindow(days: number, limit = 50): StoredSessionListItem[] {
@@ -782,16 +990,84 @@ function parseStringArray(json: string): string[] {
   }
 }
 
-export function defaultDatabasePath(): string {
+export interface DatabasePathResolution {
+  path: string;
+  source: 'env' | 'canonical_home' | 'legacy_cwd_migrated' | 'legacy_cwd_fallback' | 'explicit';
+  canonicalPath: string;
+  legacyPath: string | null;
+  migrationPerformed: boolean;
+}
+
+function canonicalDatabasePath(): string {
+  return join(homedir(), '.ttm', 'ttm.sqlite');
+}
+
+function legacyDatabaseCandidate(): string | null {
+  const candidate = join(process.cwd(), '.ttm', 'ttm.sqlite');
+  return candidate === canonicalDatabasePath() ? null : candidate;
+}
+
+export function resolveDefaultDatabasePath(): DatabasePathResolution {
   const envPath = process.env.TTM_DB_PATH;
   if (envPath) {
     const validated = validateDatabasePath(envPath);
     if (!validated.valid) {
       throw new Error(`Invalid TTM_DB_PATH: ${validated.error}`);
     }
-    return validated.path;
+    return {
+      path: validated.path,
+      source: 'env',
+      canonicalPath: canonicalDatabasePath(),
+      legacyPath: null,
+      migrationPerformed: false,
+    };
   }
-  return join(process.cwd(), '.ttm', 'ttm.sqlite');
+
+  const canonicalPath = canonicalDatabasePath();
+  if (existsSync(canonicalPath)) {
+    return {
+      path: canonicalPath,
+      source: 'canonical_home',
+      canonicalPath,
+      legacyPath: null,
+      migrationPerformed: false,
+    };
+  }
+
+  const legacyPath = legacyDatabaseCandidate();
+  if (legacyPath && existsSync(legacyPath)) {
+    try {
+      mkdirSync(dirname(canonicalPath), { recursive: true });
+      copyFileSync(legacyPath, canonicalPath);
+      return {
+        path: canonicalPath,
+        source: 'legacy_cwd_migrated',
+        canonicalPath,
+        legacyPath,
+        migrationPerformed: true,
+      };
+    } catch {
+      return {
+        path: legacyPath,
+        source: 'legacy_cwd_fallback',
+        canonicalPath,
+        legacyPath,
+        migrationPerformed: false,
+      };
+    }
+  }
+
+  return {
+    path: canonicalPath,
+    source: 'canonical_home',
+    canonicalPath,
+    legacyPath: legacyPath && existsSync(legacyPath) ? legacyPath : null,
+    migrationPerformed: false,
+  };
+}
+
+export function defaultDatabasePath(): string {
+  return resolveDefaultDatabasePath().path;
 }
 
 interface ValidationResult {

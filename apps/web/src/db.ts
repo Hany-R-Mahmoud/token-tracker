@@ -1,4 +1,5 @@
-import { mkdirSync, chmodSync, existsSync } from 'node:fs';
+import { copyFileSync, mkdirSync, chmodSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -524,16 +525,84 @@ export class LeaderboardDatabase {
   }
 }
 
-export function defaultLeaderboardDatabasePath(): string {
+export interface LeaderboardPathResolution {
+  path: string;
+  source: 'env' | 'canonical_home' | 'legacy_cwd_migrated' | 'legacy_cwd_fallback';
+  canonicalPath: string;
+  legacyPath: string | null;
+  migrationPerformed: boolean;
+}
+
+function canonicalLeaderboardDatabasePath(): string {
+  return join(homedir(), '.ttm', 'leaderboard.sqlite');
+}
+
+function legacyLeaderboardDatabaseCandidate(): string | null {
+  const candidate = join(process.cwd(), '.ttm', 'leaderboard.sqlite');
+  return candidate === canonicalLeaderboardDatabasePath() ? null : candidate;
+}
+
+export function resolveDefaultLeaderboardDatabasePath(): LeaderboardPathResolution {
   const envPath = process.env.TTM_LEADERBOARD_DB_PATH;
   if (envPath) {
     const validated = validateLeaderboardPath(envPath);
     if (!validated.valid) {
       throw new Error(`Invalid TTM_LEADERBOARD_DB_PATH: ${validated.error}`);
     }
-    return validated.path;
+    return {
+      path: validated.path,
+      source: 'env',
+      canonicalPath: canonicalLeaderboardDatabasePath(),
+      legacyPath: null,
+      migrationPerformed: false,
+    };
   }
-  return join(process.cwd(), '.ttm', 'leaderboard.sqlite');
+
+  const canonicalPath = canonicalLeaderboardDatabasePath();
+  if (existsSync(canonicalPath)) {
+    return {
+      path: canonicalPath,
+      source: 'canonical_home',
+      canonicalPath,
+      legacyPath: null,
+      migrationPerformed: false,
+    };
+  }
+
+  const legacyPath = legacyLeaderboardDatabaseCandidate();
+  if (legacyPath && existsSync(legacyPath)) {
+    try {
+      mkdirSync(dirname(canonicalPath), { recursive: true });
+      copyFileSync(legacyPath, canonicalPath);
+      return {
+        path: canonicalPath,
+        source: 'legacy_cwd_migrated',
+        canonicalPath,
+        legacyPath,
+        migrationPerformed: true,
+      };
+    } catch {
+      return {
+        path: legacyPath,
+        source: 'legacy_cwd_fallback',
+        canonicalPath,
+        legacyPath,
+        migrationPerformed: false,
+      };
+    }
+  }
+
+  return {
+    path: canonicalPath,
+    source: 'canonical_home',
+    canonicalPath,
+    legacyPath: legacyPath && existsSync(legacyPath) ? legacyPath : null,
+    migrationPerformed: false,
+  };
+}
+
+export function defaultLeaderboardDatabasePath(): string {
+  return resolveDefaultLeaderboardDatabasePath().path;
 }
 
 interface ValidationResult {

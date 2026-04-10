@@ -1,0 +1,8 @@
+
+  .mb-hero-period {
+    font-size: 10px;
+    color: var(--mb-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-top: 2px;
+  }

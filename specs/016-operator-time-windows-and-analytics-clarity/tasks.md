@@ -1,0 +1,23 @@
+# Tasks: Operator Time Windows And Analytics Clarity
+
+- [ ] T001 Start with `agent-orchestrator` and confirm the canonical period model before implementation begins
+- [ ] T002 Read the Phase 016 research note, Phase 009 visual-analytics revisit research, and the compact handoff protocol files before changing code
+- [ ] T003 Define shared `1h / 1d / 7d / 1m / all` period types and URL/query semantics
+- [ ] T004 Update the read-service and database query layer so hourly, daily, monthly, and all-time windows are real data queries rather than UI aliases
+- [ ] T005 Update overview to honor the selected period across hero metrics, supporting sections, and any session lists that should be period-scoped
+- [ ] T006 Update analytics to honor the same period model, including export behavior
+- [ ] T007 Replace current broken/inconsistent timeframe chips with truthful controls and visible active state
+- [ ] T008 Change tray polling and tray title semantics to use scoped spend rather than unlabeled all-time totals
+- [ ] T009 Update menubar hero copy so the spend scope is explicit and daily monitoring is supported by default
+- [ ] T010 Preserve labeled access to all-time totals where it still helps orientation
+- [ ] T011 Add a visible notification-state surface for context thresholds, including delivery mode or suppression reason
+- [ ] T012 Ensure ambient-only or in-app downgrade paths are visible somewhere in the app instead of disappearing silently
+- [ ] T013 Remove or replace synthetic observability metric labels that imply unavailable telemetry
+- [ ] T014 Improve overview storytelling so users can tell what changed, what is risky, and what to inspect next
+- [ ] T015 Improve analytics charts so each major block includes explanatory copy, clearer comparison framing, and accessible value access
+- [ ] T016 Make efficiency and consumption visuals more informative for provider, model, and session comparison
+- [ ] T017 Verify keyboard/focus behavior and avoid hover-only meaning for key charts and controls
+- [ ] T018 Run `agent-reviewer` for correctness, semantic honesty, and regression risk
+- [ ] T019 Run `agent-tester` for period behavior, export parity, notification visibility, and surface validation
+- [ ] T020 Archive phase prompt/report artifacts under `docs/handoffs/phase-016/`
+- [ ] T021 Update quickstart acceptance rows with evidence-based `PASS`, `PARTIAL`, or `FAIL`

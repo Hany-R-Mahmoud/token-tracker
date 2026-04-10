@@ -73,3 +73,6 @@ instruction blocks inline.
 | Phase 008 | Visual System and Brand Refresh | `phase-008/` | Prompt/spec archived |
 | Phase 009 | Success Analysis and Representation | `phase-009/` | Archived |
 | Phase 010 | Session Context Audit and Compact Handoffs | `phase-010/` | Prompt/spec created |
+| Phase 016 | Operator Time Windows And Analytics Clarity | `phase-016/` | Prompt/spec created |
+| Phase 017 | Phase 009 Claim Audit And Gap Closure | `phase-017/` | Prompt/spec created |
+| Phase 018 | Phase 016 Gap Audit And Closure | `phase-018/` | Prompt/spec created |

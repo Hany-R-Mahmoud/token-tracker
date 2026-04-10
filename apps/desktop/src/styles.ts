@@ -19,9 +19,9 @@ export const PAGE_STYLES = `
     --success: #36ffc4;
     --success-bg: rgba(54, 255, 196, 0.12);
     --success-text: #a3ffd9;
-    --warning: #b9c8de;
-    --warning-bg: rgba(185, 200, 222, 0.12);
-    --warning-text: #d5e4fb;
+    --warning: #f0c674;
+    --warning-bg: rgba(240, 198, 116, 0.15);
+    --warning-text: #f0c674;
     --critical: #b01522;
     --critical-bg: rgba(176, 21, 34, 0.16);
     --critical-text: #ffc1bd;
@@ -65,8 +65,8 @@ export const PAGE_STYLES = `
     --success-bg: rgba(0, 108, 80, 0.1);
     --success-text: #00513c;
     --warning: #3c4a5d;
-    --warning-bg: rgba(60, 74, 93, 0.12);
-    --warning-text: #233143;
+    --warning-bg: rgba(60, 74, 93, 0.18);
+    --warning-text: #1a2a3d;
     --critical: #930015;
     --critical-bg: rgba(147, 0, 21, 0.1);
     --critical-text: #68000c;
@@ -492,6 +492,10 @@ export const PAGE_STYLES = `
   .theme-toggle:focus-visible,
   .btn-primary:focus-visible,
   .btn-secondary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  :focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
@@ -1105,11 +1109,11 @@ export const PAGE_STYLES = `
     box-shadow: 0 0 18px rgba(163, 255, 217, 0.34);
   }
   .operational-copy h2 {
-    font-size: clamp(38px, 5vw, 56px);
+    font-size: clamp(28px, 4vw, 42px);
     margin: 0;
-    line-height: 0.92;
-    text-transform: uppercase;
-    letter-spacing: -0.05em;
+    line-height: 1;
+    text-transform: none;
+    letter-spacing: -0.02em;
   }
   .operational-copy p {
     margin: 0;
@@ -1578,6 +1582,17 @@ export const PAGE_STYLES = `
       scroll-behavior: auto !important;
     }
   }
+  @media (prefers-contrast: more) {
+    :root {
+      --border: #000000;
+      --border-strong: #000000;
+      --text-secondary: #1a1a1a;
+      --text-muted: #333333;
+    }
+    .section, .stat-card, .kinetic-panel, .kinetic-kpi-card {
+      border-width: 2px;
+    }
+  }
   .skip-link {
     position: absolute;
     top: -40px;
@@ -1622,6 +1637,11 @@ export const PAGE_STYLES = `
   }
   @media (max-width: 720px) {
     body { padding: 0 14px 20px; }
+    h1 { font-size: clamp(22px, 4vw, 32px); }
+    .kinetic-kpi-value { font-size: 28px; }
+    .kinetic-panel-head h2 { font-size: 18px; }
+    .stat-value { font-size: 24px; }
+    .operational-copy h2 { font-size: clamp(24px, 5vw, 32px); }
     .nav {
       margin: 0 -14px 20px;
       grid-template-columns: 1fr;
@@ -1809,6 +1829,13 @@ export const MENUBAR_STYLES = `
     line-height: 0.94;
     font-weight: 700;
     color: var(--mb-text);
+  }
+  .mb-hero-period {
+    font-size: 10px;
+    color: var(--mb-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-top: 2px;
   }
   .mb-hero-meta {
     display: flex;

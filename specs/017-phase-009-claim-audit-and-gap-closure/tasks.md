@@ -1,0 +1,21 @@
+# Tasks: Phase 009 Claim Audit And Gap Closure
+
+- [ ] G001 Start with `agent-orchestrator` and treat this as a truth-reconciliation pass, not a broad redesign
+- [ ] G002 Read the Phase 017 research note, both Phase 009 completion reports, and the current Phase 009 revisit quickstart/tasks before editing anything
+- [ ] G003 Create a claim matrix of archived Phase 009 completion statements versus current code state
+- [ ] G004 Fix the provider summary SQL issue if the malformed query is still present
+- [ ] G005 Verify provider summary queries run successfully after the fix
+- [ ] G006 Audit Overview success-related helpers and determine whether to wire them, remove them, or downgrade the archive claim
+- [ ] G007 Resolve the empty `buildVerificationDistributionCard()` placeholder or explicitly document it as not delivered
+- [ ] G008 Review the analytics success funnel and decide whether it should be:
+  - replaced with direct aggregate counts
+  - or relabeled/documented as heuristic
+- [ ] G009 Reconcile `docs/handoffs/phase-009/completion-report.md` with the current code and spec reality
+- [ ] G010 Reconcile `docs/handoffs/phase-009/final-completion-report.md` with the current code and spec reality
+- [ ] G011 Update the Phase 009 quickstart or archive wording so narrow success-analysis completion and broader visual revisit planning no longer conflict
+- [ ] G012 Ensure final wording explicitly distinguishes delivered work from remaining revisit work
+- [ ] G013 Run `npm run build`
+- [ ] G014 Run `npm run typecheck`
+- [ ] G015 Run any targeted validation for provider summary queries
+- [ ] G016 Archive the Phase 017 prompt/report artifacts under `docs/handoffs/phase-017/`
+- [ ] G017 Report each acceptance item as `PASS`, `PARTIAL`, or `FAIL` with evidence

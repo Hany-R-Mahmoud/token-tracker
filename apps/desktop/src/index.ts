@@ -2,7 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { watchFile, existsSync } from 'node:fs';
 import type { Stats } from 'node:fs';
-import { TtmDatabase, TtmReadService, defaultDatabasePath } from '@ttm/core';
+import { TtmDatabase, TtmReadService } from '@ttm/core';
 import { buildAnalyticsSummarySvg } from './export-svg.js';
 import type {
   ReadSummarySnapshot,
@@ -29,6 +29,7 @@ import type {
   ActiveSurfaceResolution,
   MatchConfidence,
   NotificationCheckpoint,
+  DatabasePathResolution,
 } from '@ttm/core';
 import {
   deriveThresholdBand,
@@ -82,26 +83,69 @@ function sendError(res: ServerResponse, statusCode: number, publicMessage: strin
   res.end(publicMessage);
 }
 
-function buildErrorHtml(message: string): string {
+type DesktopSurface = 'overview' | 'analytics';
+type EmptyStateKind = 'no-imported-data' | 'no-window-data';
+
+interface DesktopRuntimeStatus {
+  runtimeMode: string;
+  instanceToken: string;
+  ownerPath: string;
+  port: number;
+  databasePath: string;
+  databaseSource: DatabasePathResolution['source'];
+  canonicalDatabasePath: string;
+  legacyDatabasePath: string | null;
+  migrationPerformed: boolean;
+  totalSessionCount: number;
+  analyticsWindowDays: number;
+  analyticsWindowSessionCount: number;
+  refreshCadenceSeconds: number;
+  dbExists: boolean;
+  startedAt: string;
+}
+
+const DESKTOP_STARTED_AT = new Date().toISOString();
+const DESKTOP_RUNTIME_MODE = process.env.TTM_DESKTOP_RUNTIME ?? 'dev';
+const DESKTOP_RUNTIME_INSTANCE_TOKEN = process.env.TTM_RUNTIME_INSTANCE_TOKEN ?? 'dev-runtime';
+const DESKTOP_RUNTIME_OWNER_PATH = process.env.TTM_RUNTIME_OWNER_PATH ?? '';
+let desktopDatabaseResolution: DatabasePathResolution | null = null;
+
+function buildErrorHtml(surface: DesktopSurface, message: string, runtimeStatus?: DesktopRuntimeStatus): string {
+  const title = surface === 'analytics' ? 'Analytics' : 'Overview';
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — Error</title><style>${PAGE_STYLES}</style></head>
-<body>
-  ${buildDesktopNav('overview')}
-  <main><h1>Error</h1><p class="error">An unexpected error occurred. Please try again.</p></main>
+  <body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  ${buildDesktopNav(surface)}
+  <main id="main-content"><h1>${title}</h1><p class="error">An unexpected error occurred. Please try again.</p>${runtimeStatus ? buildRuntimeStatusCard(runtimeStatus) : ''}</main>
   ${buildThemeScript()}
 </body></html>`;
 }
 
-function buildEmptyHtml(): string {
+function buildEmptyHtml(surface: DesktopSurface, runtimeStatus: DesktopRuntimeStatus, kind: EmptyStateKind): string {
+  const title = surface === 'analytics' ? 'Analytics' : 'Overview';
+  const body = kind === 'no-window-data'
+    ? `No sessions were found in the last ${runtimeStatus.analyticsWindowDays} days, but Token Tracker can still see historical data in the active database.`
+    : 'No data has been imported into the active local database yet.';
+  const hint = kind === 'no-window-data'
+    ? '<p class="empty" style="margin-top:12px">Try a wider time window or inspect the runtime diagnostics below before assuming imports are missing.</p>'
+    : '<p class="empty" style="margin-top:12px">Run <code>ttm import</code> only if the diagnostics below show the active database truly has 0 sessions.</p>';
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker</title><style>${PAGE_STYLES}</style></head>
 <body>
-  ${buildDesktopNav('overview')}
-  <main><h1>Token Tracker</h1><p class="empty">No data imported yet. Run <code>ttm import</code> to populate the local store.</p></main>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  ${buildDesktopNav(surface)}
+  <main id="main-content">
+    <h1>${title}</h1>
+    <p class="empty">${body}</p>
+    ${hint}
+    ${buildRuntimeStatusCard(runtimeStatus)}
+  </main>
   ${buildThemeScript()}
 </body></html>`;
 }
@@ -126,7 +170,7 @@ function buildThemeScript(): string {
   </script>`;
 }
 
-function buildDesktopNav(active: 'overview' | 'analytics' | 'menubar', options: { showRefreshIndicator?: boolean } = {}): string {
+function buildDesktopNav(active: DesktopSurface, options: { showRefreshIndicator?: boolean } = {}): string {
   const refreshIndicator = options.showRefreshIndicator
     ? '<span class="refresh-indicator" id="refresh-state" title="Auto-refresh: watching database" role="status" aria-live="polite"></span>'
     : '<span class="refresh-indicator refresh-indicator-placeholder" aria-hidden="true">watching database</span>';
@@ -136,13 +180,95 @@ function buildDesktopNav(active: 'overview' | 'analytics' | 'menubar', options: 
     <div class="nav-links">
       <a href="/"${active === 'overview' ? ' class="active"' : ''}>Overview</a>
       <a href="/analytics"${active === 'analytics' ? ' class="active"' : ''}>Analytics</a>
-      <a href="/menubar"${active === 'menubar' ? ' class="active"' : ''}>Menubar</a>
     </div>
     <div class="nav-actions">
       ${refreshIndicator}
+      <span class="nav-notification-status" title="Notification status: ambient mode - notifications shown in-app">
+        <span class="nav-notification-icon">🔔</span>
+        <span class="nav-notification-label">Ambient</span>
+      </span>
       <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button>
     </div>
   </nav>`;
+}
+
+function buildRuntimeStatusCard(runtimeStatus: DesktopRuntimeStatus): string {
+  const sourceLabels: Record<DesktopRuntimeStatus['databaseSource'], string> = {
+    canonical_home: 'canonical home database',
+    env: 'env override',
+    explicit: 'explicit path',
+    legacy_cwd_fallback: 'legacy fallback path',
+    legacy_cwd_migrated: 'legacy path migrated to home',
+  };
+
+  return `<div class="section" style="margin-top:20px">
+    <h2>Runtime Diagnostics</h2>
+    <div class="details-grid">
+      <div class="detail-label">Runtime</div><div class="detail-value">${escapeHtml(runtimeStatus.runtimeMode)}</div>
+      <div class="detail-label">Port</div><div class="detail-value">${runtimeStatus.port}</div>
+      <div class="detail-label">Owner</div><div class="detail-value"><code>${escapeHtml(runtimeStatus.ownerPath || 'unknown')}</code></div>
+      <div class="detail-label">Database</div><div class="detail-value"><code>${escapeHtml(runtimeStatus.databasePath)}</code></div>
+      <div class="detail-label">Source</div><div class="detail-value">${escapeHtml(sourceLabels[runtimeStatus.databaseSource] ?? runtimeStatus.databaseSource)}</div>
+      <div class="detail-label">Canonical path</div><div class="detail-value"><code>${escapeHtml(runtimeStatus.canonicalDatabasePath)}</code></div>
+      <div class="detail-label">Legacy path</div><div class="detail-value">${runtimeStatus.legacyDatabasePath ? `<code>${escapeHtml(runtimeStatus.legacyDatabasePath)}</code>` : 'none detected'}</div>
+      <div class="detail-label">Migration</div><div class="detail-value">${runtimeStatus.migrationPerformed ? 'performed on startup' : 'not needed'}</div>
+      <div class="detail-label">Total sessions</div><div class="detail-value">${runtimeStatus.totalSessionCount}</div>
+      <div class="detail-label">${runtimeStatus.analyticsWindowDays}d sessions</div><div class="detail-value">${runtimeStatus.analyticsWindowSessionCount}</div>
+      <div class="detail-label">DB exists</div><div class="detail-value">${runtimeStatus.dbExists ? 'yes' : 'no'}</div>
+      <div class="detail-label">Refresh cadence</div><div class="detail-value">${runtimeStatus.refreshCadenceSeconds}s</div>
+      <div class="detail-label">Started</div><div class="detail-value">${escapeHtml(runtimeStatus.startedAt)}</div>
+    </div>
+    <div class="footer-note" style="margin-top:12px">
+      <a href="/api/runtime-status">View runtime JSON</a>
+    </div>
+  </div>`;
+}
+
+function getRuntimeStatus(readService: TtmReadService, prefs: MonitoringPreferences, analyticsWindowDays = prefs.defaultAnalyticsWindowDays): DesktopRuntimeStatus {
+  const summary = readService.getSummarySnapshot();
+  const analytics = readService.getAnalyticsSnapshot(analyticsWindowDays);
+  const resolution = desktopDatabaseResolution ?? {
+    path: summary.databasePath,
+    source: 'explicit',
+    canonicalPath: summary.databasePath,
+    legacyPath: null,
+    migrationPerformed: false,
+  };
+
+  return {
+    runtimeMode: DESKTOP_RUNTIME_MODE,
+    instanceToken: DESKTOP_RUNTIME_INSTANCE_TOKEN,
+    ownerPath: DESKTOP_RUNTIME_OWNER_PATH,
+    port: PORT,
+    databasePath: summary.databasePath,
+    databaseSource: resolution.source,
+    canonicalDatabasePath: resolution.canonicalPath,
+    legacyDatabasePath: resolution.legacyPath,
+    migrationPerformed: resolution.migrationPerformed,
+    totalSessionCount: summary.sessionCount,
+    analyticsWindowDays,
+    analyticsWindowSessionCount: analytics.sessionCount,
+    refreshCadenceSeconds: prefs.refreshCadenceSeconds,
+    dbExists: existsSync(summary.databasePath),
+    startedAt: DESKTOP_STARTED_AT,
+  };
+}
+
+function buildRuntimeDiagnosticsHtml(runtimeStatus: DesktopRuntimeStatus): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Token Tracker — Runtime Diagnostics</title><style>${PAGE_STYLES}</style></head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  ${buildDesktopNav('overview')}
+  <main id="main-content">
+    <h1>Runtime Diagnostics</h1>
+    <p class="subtitle">Packaged and local desktop modes must agree on the same active database.</p>
+    ${buildRuntimeStatusCard(runtimeStatus)}
+  </main>
+  ${buildThemeScript()}
+</body></html>`;
 }
 
 interface DesktopActiveSurfacePanelData {
@@ -383,22 +509,15 @@ function buildStepChartSvg(values: number[], color: string, areaColor: string): 
   </svg>`;
 }
 
-function buildOperationalTimeChips(activeDays: number, basePath: '/' | '/analytics' = '/'): string {
-  const windows = basePath === '/analytics'
-    ? [7, 14, 30, 90]
-    : [1, 7, 30, 90];
+function buildOperationalTimeChips(activePeriod: string, basePath: '/' | '/analytics' = '/'): string {
+  const periodIds = ['1h', '1d', '7d', '1m', 'all'] as const;
 
   return `<div class="signal-window-chips">
-    ${windows.map((windowDays) => {
-      const label = windowDays === 1 ? '1H' : `${windowDays}D`;
-      const href = basePath === '/analytics'
-        ? `/analytics?days=${windowDays}`
-        : windowDays === 1
-          ? '/'
-          : `/?days=${windowDays}`;
-      const activeClass = activeDays === windowDays || (basePath === '/' && activeDays === 30 && windowDays === 1)
-        ? ' signal-window-chip-active'
-        : '';
+    ${periodIds.map((periodId) => {
+      const labelMap: Record<string, string> = { '1h': '1hr', '1d': '1 day', '7d': '7 days', '1m': '1 month', 'all': 'All' };
+      const label = labelMap[periodId] || periodId;
+      const href = `${basePath}?period=${periodId}`;
+      const activeClass = activePeriod === periodId ? ' signal-window-chip-active' : '';
       return `<a class="signal-window-chip${activeClass}" href="${href}">${label}</a>`;
     }).join('')}
   </div>`;
@@ -535,6 +654,7 @@ function buildOverviewHero(
   totalCost: number,
   contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null,
   activeSurfacePanel: DesktopActiveSurfacePanelData | null,
+  activePeriod: string = '1d',
 ): string {
   const successScores = snapshot.providerSummaries.filter((summary) => summary.averageSuccessScore !== null);
   const avgSuccess = successScores.length > 0
@@ -564,7 +684,7 @@ function buildOverviewHero(
         <span>${syncLag}</span>
       </div>
     </div>
-    ${buildOperationalTimeChips(1)}
+    ${buildOperationalTimeChips(activePeriod)}
   </section>`;
 }
 
@@ -600,7 +720,7 @@ function buildOverviewKpiDeck(
       value: latencyBaseline.toFixed(1),
       suffix: 'ms',
       className: '',
-      chart: '<div class="line-meter"><span style="width:74%"></span></div>',
+      chart: '<div class="line-meter" role="progressbar" aria-valuenow="74" aria-valuemin="0" aria-valuemax="100" aria-label="P99 Latency capacity"><span style="width:74%"></span></div>',
     },
     {
       label: 'Network Load',
@@ -652,7 +772,7 @@ function buildOverviewTrendActivity(snapshot: ReadSummarySnapshot, sessions: Sto
   </section>`;
 }
 
-function buildOverviewProviderIntegrity(snapshot: ReadSummarySnapshot, activeSurfacePanel: DesktopActiveSurfacePanelData | null): string {
+function buildOverviewProviderIntegrity(snapshot: ReadSummarySnapshot, activeSurfacePanel: DesktopActiveSurfacePanelData | null, activePeriod: string = '1d'): string {
   const providers = snapshot.providerSummaries
     .slice()
     .sort((left, right) => (right.averageEfficiency ?? 0) - (left.averageEfficiency ?? 0))
@@ -741,7 +861,7 @@ function buildOverviewLiveFeed(sessions: StoredSessionListItem[]): string {
   </section>`;
 }
 
-function buildAnalyticsHero(analytics: ReadAnalyticsSnapshot, totalTokens: number, totalCost: number, activeDays: number): string {
+function buildAnalyticsHero(analytics: ReadAnalyticsSnapshot, totalTokens: number, totalCost: number, activePeriod: string): string {
   const providers = analytics.providerSummaries;
   const bestValue = providers
     .filter((summary) => summary.averageValueDensityScore !== null)
@@ -757,21 +877,21 @@ function buildAnalyticsHero(analytics: ReadAnalyticsSnapshot, totalTokens: numbe
 
   return `<section class="analytics-hero-grid">
     <div class="analytics-hero-main">
-      <label>Live Performance Index</label>
-      <div class="analytics-hero-value">${liveIndex.toFixed(2)}<span>TPS</span></div>
-      <div class="analytics-hero-delta">+${(activeDays / 4).toFixed(1)}%</div>
+      <label>AI Usage Score</label>
+      <div class="analytics-hero-value">${liveIndex.toFixed(1)}<span>/100</span></div>
+      <div class="analytics-hero-delta">Value density index</div>
       ${buildMiniBars(analytics.dailyBuckets.slice(-8).map((bucket) => bucket.sessions || 1), 'var(--accent)')}
     </div>
     <div class="analytics-hero-side">
       <div class="analytics-side-card analytics-side-card-primary">
-        <label>Network Load</label>
-        <strong>${loadValue.toFixed(1)} GB/s</strong>
-        <div class="line-meter"><span style="width:${clampNumber(loadValue, 18, 96)}%"></span></div>
+        <label>Total Spend</label>
+        <strong>$${totalCost.toFixed(2)}</strong>
+        <div class="line-meter" role="progressbar" aria-valuenow="${clampNumber(loadValue, 18, 96)}" aria-valuemin="0" aria-valuemax="100" aria-label="Spend relative to baseline"><span style="width:${clampNumber(loadValue, 18, 96)}%"></span></div>
       </div>
       <div class="analytics-side-card analytics-side-card-critical">
-        <label>Error Latency</label>
-        <strong>${errorLatency}ms</strong>
-        <div class="line-meter line-meter-critical"><span style="width:${clampNumber(errorLatency * 4, 10, 90)}%"></span></div>
+        <label>Avg Cost/Session</label>
+        <strong>$${(totalCost / Math.max(analytics.sessionCount, 1)).toFixed(2)}</strong>
+        <div class="line-meter line-meter-critical" role="progressbar" aria-valuenow="${Math.round(errorLatency * 4)}" aria-valuemin="0" aria-valuemax="100" aria-label="Average session cost"><span style="width:${clampNumber(errorLatency * 4, 10, 90)}%"></span></div>
       </div>
     </div>
   </section>`;
@@ -992,7 +1112,7 @@ function buildActiveSurfaceTruthSection(panel: DesktopActiveSurfacePanelData): s
   </div>`;
 }
 
-function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessionListItem[], activeProvider: string | null, activeModel: string | null, activeQ: string | null, listResult: { sessions: StoredSessionListItem[]; total: number; page: number; pageSize: number; totalPages: number } | null, modelOptions: { model: string; sessionCount: number }[], contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null, activeSurfacePanel: DesktopActiveSurfacePanelData | null): string {
+function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessionListItem[], activeProvider: string | null, activeModel: string | null, activeQ: string | null, listResult: { sessions: StoredSessionListItem[]; total: number; page: number; pageSize: number; totalPages: number } | null, modelOptions: { model: string; sessionCount: number }[], contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null, activeSurfacePanel: DesktopActiveSurfacePanelData | null, activePeriod: string = '1d'): string {
   const totalTokens = snapshot.providerSummaries.reduce((s: number, p: SessionSummary) => s + p.totalTokens, 0);
   const totalCost = snapshot.providerSummaries.reduce((s: number, p: SessionSummary) => s + p.totalCostUsd, 0);
   const providerRows = snapshot.providerSummaries.length > 0
@@ -1022,7 +1142,7 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
   <h1>Overview</h1>
   <p class="subtitle">Database: <code>${escapeHtml(snapshot.databasePath)}</code></p>
 
-  ${buildOverviewHero(snapshot, sessions, totalTokens, totalCost, contextHealth, activeSurfacePanel)}
+  ${buildOverviewHero(snapshot, sessions, totalTokens, totalCost, contextHealth, activeSurfacePanel, activePeriod)}
   ${buildOverviewKpiDeck(snapshot, sessions, contextHealth)}
 
   <section class="analytics-grid analytics-grid-featured">
@@ -1104,7 +1224,7 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
   ${paginationHtml}
 
   <p class="footer-note">
-    <a href="/export/analytics-svg" class="btn-primary">📥 Download SVG</a>
+    <a href="/export/analytics-svg?period=${activePeriod}" class="btn-primary">📥 Download SVG</a>
     <button class="btn-secondary" onclick="copyOverviewSummary()">📋 Copy summary</button>
   </p>
   <script>
@@ -1504,7 +1624,7 @@ function buildPaginationHtml(listResult: { total: number; page: number; pageSize
   </div>`;
 }
 
-function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number, activeSurfacePanel: DesktopActiveSurfacePanelData | null): string {
+function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activePeriod: string, activeSurfacePanel: DesktopActiveSurfacePanelData | null): string {
   const totalTokens = analytics.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalTokens, 0);
   const totalCost = analytics.providerSummaries.reduce((sum: number, p: SessionSummary) => sum + p.totalCostUsd, 0);
 
@@ -1550,8 +1670,8 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
   <h1>Analytics</h1>
   <p class="subtitle">Database: <code>${escapeHtml(analytics.databasePath)}</code></p>
 
-  ${buildAnalyticsHero(analytics, totalTokens, totalCost, activeDays)}
-  ${buildOperationalTimeChips(activeDays, '/analytics')}
+  ${buildAnalyticsHero(analytics, totalTokens, totalCost, activePeriod)}
+  ${buildOperationalTimeChips(activePeriod, '/analytics')}
 
   ${buildAnalyticsTrendPanels(analytics)}
   ${buildAnalyticsValueMatrix(analytics)}
@@ -1608,7 +1728,7 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activeDays: number
   </div>
 
   <p class="footer-note">
-    <a href="/export/analytics-svg" class="btn-primary">📥 Download SVG</a>
+    <a href="/export/analytics-svg?period=${activePeriod}" class="btn-primary">📥 Download SVG</a>
     <button class="btn-secondary" onclick="copyAnalyticsSummary()">📋 Copy summary</button>
   </p>
   <script>
@@ -1695,7 +1815,7 @@ function buildDetailHtml(session: StoredSessionDetail): string {
 </body></html>`;
 }
 
-function parseUrlPath(rawUrl: string): { path: string; sessionId: string | null; provider: string | null; model: string | null; q: string | null; page: number; mode: string | null } {
+function parseUrlPath(rawUrl: string): { path: string; sessionId: string | null; provider: string | null; model: string | null; q: string | null; page: number; mode: string | null; period: string | null } {
   const queryStringIndex = rawUrl.indexOf('?');
   const path = queryStringIndex >= 0 ? rawUrl.slice(0, queryStringIndex) : rawUrl;
   const query = queryStringIndex >= 0 ? rawUrl.slice(queryStringIndex + 1) : '';
@@ -1706,6 +1826,7 @@ function parseUrlPath(rawUrl: string): { path: string; sessionId: string | null;
   let q: string | null = null;
   let page = 1;
   let mode: string | null = null;
+  let period: string | null = '1d';
   for (const param of query.split('&')) {
     const [key, value] = param.split('=');
     if (key === 'session' && value) {
@@ -1723,18 +1844,26 @@ function parseUrlPath(rawUrl: string): { path: string; sessionId: string | null;
       }
     } else if (key === 'mode' && value) {
       mode = decodeURIComponent(value);
+    } else if (key === 'period' && value) {
+      period = decodeURIComponent(value);
     } else if (key === 'days' && value) {
-      // days param is handled separately in analytics handler
+      const daysVal = Number(value);
+      if (daysVal === 0) period = '1h';
+      else if (daysVal === 1) period = '1d';
+      else if (daysVal === 7) period = '7d';
+      else if (daysVal >= 30) period = '1m';
+      else period = 'all';
     }
   }
 
-  return { path, sessionId, provider, model, q, page, mode };
+  return { path, sessionId, provider, model, q, page, mode, period };
 }
 
 function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
   readService: TtmReadService,
+  prefs: MonitoringPreferences,
 ): void {
   applySecurityHeaders(response);
 
@@ -1770,7 +1899,7 @@ function handleRequest(
   }
 
   const rawUrl = request.url ?? '/';
-  const { path, sessionId, provider, model, q, page, mode } = parseUrlPath(rawUrl);
+  const { path, sessionId, provider, model, q, page, mode, period } = parseUrlPath(rawUrl);
 
   if (path === '/api/summary') {
     // Require API key for programmatic access (Tauri tray polling)
@@ -1787,6 +1916,17 @@ function handleRequest(
       const snapshot = readService.getSummarySnapshot();
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify(snapshot));
+    } catch (error) {
+      sendError(response, 500, 'Internal server error', String(error));
+    }
+    return;
+  }
+
+  if (path === '/api/runtime-status') {
+    try {
+      const runtimeStatus = getRuntimeStatus(readService, prefs);
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(runtimeStatus));
     } catch (error) {
       sendError(response, 500, 'Internal server error', String(error));
     }
@@ -1842,19 +1982,26 @@ function handleRequest(
   if (path === '/export/analytics-svg') {
     let analytics: ReadAnalyticsSnapshot | null = null;
     let error: string | null = null;
-    let exportDays = 30;
+    let activePeriod = '1d';
 
     const exportUrlParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
-    const exportDaysParam = exportUrlParams.get('days');
-    if (exportDaysParam) {
-      const parsed = Number(exportDaysParam);
-      if ([7, 14, 30, 90].includes(parsed)) {
-        exportDays = parsed;
+    const periodParam = exportUrlParams.get('period');
+    if (periodParam && ['1h', '1d', '7d', '1m', 'all'].includes(periodParam)) {
+      activePeriod = periodParam;
+    } else {
+      const daysParam = exportUrlParams.get('days');
+      if (daysParam) {
+        const parsed = Number(daysParam);
+        if (parsed === 0) activePeriod = '1h';
+        else if (parsed === 1) activePeriod = '1d';
+        else if (parsed === 7) activePeriod = '7d';
+        else if (parsed >= 30) activePeriod = '1m';
       }
     }
 
     try {
-      analytics = readService.getAnalyticsSnapshot(exportDays);
+      const periodId = activePeriod as '1h' | '1d' | '7d' | '1m' | 'all';
+      analytics = readService.getAnalyticsSnapshotForPeriod(periodId);
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
     }
@@ -1868,7 +2015,7 @@ function handleRequest(
     const svg = buildAnalyticsSummarySvg(analytics);
     response.writeHead(200, {
       'Content-Type': 'image/svg+xml',
-      'Content-Disposition': `attachment; filename="token-tracker-analytics-${exportDays}d.svg"`,
+      'Content-Disposition': `attachment; filename="token-tracker-analytics-${activePeriod}.svg"`,
     });
     response.end(svg);
     return;
@@ -1876,18 +2023,35 @@ function handleRequest(
 
   if (path === '/menubar') {
     let snapshot: ReadSummarySnapshot | null = null;
+    let periodSnapshot: ReadSummarySnapshot | null = null;
     let sessions: StoredSessionListItem[] = [];
+    let periodSessions: StoredSessionListItem[] = [];
     let error: string | null = null;
     const compactMode = mode === 'minimal' ? 'minimal' : 'detailed';
+    let runtimeStatus: DesktopRuntimeStatus | null = null;
+    const activePeriod = period ?? '1d';
 
     try {
+      runtimeStatus = getRuntimeStatus(readService, prefs);
       snapshot = readService.getSummarySnapshot();
-      if (snapshot.sessionCount > 0) {
-        sessions = readService.listRecentSessions({ limit: 5 });
+      periodSnapshot = readService.getSummarySnapshotForPeriod(activePeriod as '1h' | '1d' | '7d' | '1m' | 'all');
+      if (periodSnapshot.sessionCount > 0) {
+        periodSessions = readService.listRecentSessionsForPeriod(activePeriod as '1h' | '1d' | '7d' | '1m' | 'all', { limit: 5 });
       }
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
     }
+
+    let periodCost = 0;
+    if (periodSnapshot) {
+      periodCost = periodSnapshot.providerSummaries.reduce((sum, p) => sum + p.totalCostUsd, 0);
+    }
+
+    const periodLabel = activePeriod === '1d' ? 'Today' 
+      : activePeriod === '1h' ? 'Last hour'
+      : activePeriod === '7d' ? '7 days'
+      : activePeriod === '1m' ? '30 days'
+      : 'All time';
 
     if (error) {
       response.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -1897,7 +2061,7 @@ function handleRequest(
 
     if (!snapshot || snapshot.sessionCount === 0) {
       response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      response.end(buildMenubarEmptyHtml());
+      response.end(buildMenubarEmptyHtml(runtimeStatus));
       return;
     }
 
@@ -1909,7 +2073,7 @@ function handleRequest(
     let activeSurfaceSource = 'none';
     
     try {
-      const analytics = readService.getAnalyticsSnapshot(30);
+      const analytics = readService.getAnalyticsSnapshotForPeriod(activePeriod as '1h' | '1d' | '7d' | '1m' | 'all');
       const recentWithAudit = analytics.recentSessions ?? [];
       contextPressure = { low: 0, medium: 0, high: 0, critical: 0, unknown: 0 };
       for (const s of recentWithAudit) {
@@ -1987,28 +2151,27 @@ function handleRequest(
       }
     }
     
-    response.end(buildMenubarHtml(snapshot, sessions, compactMode, null, contextPressure, windowContextSignal, activeSurfaceResolution));
+    response.end(buildMenubarHtml(snapshot, periodSessions, compactMode, null, contextPressure, windowContextSignal, activeSurfaceResolution, { period: periodLabel, cost: periodCost }));
     return;
   }
 
   if (path === '/analytics') {
     let analytics: ReadAnalyticsSnapshot | null = null;
     let error: string | null = null;
-    const defaultPrefs = loadPreferences();
-    let activeDays = defaultPrefs.defaultAnalyticsWindowDays;
+    let activePeriod = period ?? '1d';
     let activeSurfacePanel: DesktopActiveSurfacePanelData | null = null;
+    let runtimeStatus: DesktopRuntimeStatus | null = null;
 
     const urlParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
-    const daysParam = urlParams.get('days');
-    if (daysParam) {
-      const parsed = Number(daysParam);
-      if ([7, 14, 30, 90].includes(parsed)) {
-        activeDays = parsed;
-      }
+    const periodParam = urlParams.get('period');
+    if (periodParam && ['1h', '1d', '7d', '1m', 'all'].includes(periodParam)) {
+      activePeriod = periodParam;
     }
 
     try {
-      analytics = readService.getAnalyticsSnapshot(activeDays);
+      runtimeStatus = getRuntimeStatus(readService, prefs);
+      const periodId = activePeriod as '1h' | '1d' | '7d' | '1m' | 'all';
+      analytics = readService.getAnalyticsSnapshotForPeriod(periodId);
       activeSurfacePanel = computeDesktopActiveSurfacePanel(
         (analytics.recentSessions ?? []) as Array<{
           provider: string;
@@ -2022,18 +2185,30 @@ function handleRequest(
 
     if (error) {
       response.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
-      response.end(buildErrorHtml(error));
+      response.end(buildErrorHtml('analytics', error, runtimeStatus ?? undefined));
       return;
     }
 
     if (!analytics || analytics.sessionCount === 0) {
       response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      response.end(buildEmptyHtml());
+      response.end(buildEmptyHtml('analytics', runtimeStatus ?? getRuntimeStatus(readService, prefs, 30), (runtimeStatus?.totalSessionCount ?? 0) > 0 ? 'no-window-data' : 'no-imported-data'));
       return;
     }
 
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    response.end(buildAnalyticsHtml(analytics, activeDays, activeSurfacePanel));
+    response.end(buildAnalyticsHtml(analytics, activePeriod, activeSurfacePanel));
+    return;
+  }
+
+  if (path === '/diagnostics/runtime') {
+    try {
+      const runtimeStatus = getRuntimeStatus(readService, prefs);
+      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      response.end(buildRuntimeDiagnosticsHtml(runtimeStatus));
+    } catch (caught) {
+      response.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
+      response.end(buildErrorHtml('overview', caught instanceof Error ? caught.message : String(caught)));
+    }
     return;
   }
 
@@ -2050,7 +2225,7 @@ function handleRequest(
         }
       } catch (error) {
         response.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
-        response.end(buildErrorHtml(error instanceof Error ? error.message : String(error)));
+        response.end(buildErrorHtml('overview', error instanceof Error ? error.message : String(error), getRuntimeStatus(readService, prefs)));
       }
       return;
     }
@@ -2059,11 +2234,12 @@ function handleRequest(
     let sessions: StoredSessionListItem[] = [];
     let listResult: { sessions: StoredSessionListItem[]; total: number; page: number; pageSize: number; totalPages: number } | null = null;
     let error: string | null = null;
+    const activePeriod = (period ?? '1d') as '1h' | '1d' | '7d' | '1m' | 'all';
 
     try {
-      snapshot = readService.getSummarySnapshot();
+      snapshot = readService.getSummarySnapshotForPeriod(activePeriod);
       if (snapshot.sessionCount > 0) {
-        listResult = readService.listSessionsWithCount({ provider: provider ?? undefined, model: model ?? undefined, search: q ?? undefined, page });
+        listResult = readService.listSessionsWithCountForPeriod(activePeriod, { provider: provider ?? undefined, model: model ?? undefined, search: q ?? undefined, page });
         sessions = listResult.sessions;
       }
     } catch (caught) {
@@ -2072,13 +2248,13 @@ function handleRequest(
 
     if (error) {
       response.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
-      response.end(buildErrorHtml(error));
+      response.end(buildErrorHtml('overview', error, getRuntimeStatus(readService, prefs)));
       return;
     }
 
     if (!snapshot || snapshot.sessionCount === 0) {
       response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      response.end(buildEmptyHtml());
+      response.end(buildEmptyHtml('overview', getRuntimeStatus(readService, prefs), 'no-imported-data'));
       return;
     }
 
@@ -2086,7 +2262,7 @@ function handleRequest(
     let contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null = null;
     let activeSurfacePanel: DesktopActiveSurfacePanelData | null = null;
     try {
-      const analytics = readService.getAnalyticsSnapshot(30);
+      const analytics = readService.getAnalyticsSnapshotForPeriod(activePeriod);
       const recentWithAudit = analytics.recentSessions ?? [];
       let nearLimitCount = 0;
       let toolHeavyCount = 0;
@@ -2114,7 +2290,7 @@ function handleRequest(
     }
 
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    response.end(buildOverviewHtml(snapshot, sessions, provider, model, q, listResult, modelOptions, contextHealth, activeSurfacePanel));
+    response.end(buildOverviewHtml(snapshot, sessions, provider, model, q, listResult, modelOptions, contextHealth, activeSurfacePanel, period ?? '1d'));
     return;
   }
 
@@ -2173,14 +2349,18 @@ function getRefreshState(): RefreshState {
   return refreshState;
 }
 
-function buildMenubarEmptyHtml(): string {
+function buildMenubarEmptyHtml(runtimeStatus: DesktopRuntimeStatus | null): string {
+  const copy = runtimeStatus && runtimeStatus.totalSessionCount > 0
+    ? `No sessions matched the current menubar view, but Token Tracker can still see ${runtimeStatus.totalSessionCount} historical sessions in the active database.`
+    : 'No data imported yet.<br>Run <code>ttm import</code> only if the active database truly has 0 sessions.';
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker</title><style>${MENUBAR_STYLES}</style></head>
 <body>
   <div class="mb-header"><span class="mb-health-dot mb-health-dot-warn"></span><span class="mb-title">${buildBrandLockup('Token Tracker', true)}</span></div>
-  <div class="mb-empty">No data imported yet.<br>Run <code>ttm import</code> to populate.</div>
+  <div class="mb-empty">${copy}</div>
+  ${runtimeStatus ? `<div style="padding:0 14px 14px;font-size:11px;color:#9ca3af"><div>DB: <code>${escapeHtml(runtimeStatus.databasePath)}</code></div><div>Source: ${escapeHtml(runtimeStatus.databaseSource)}</div><div>Total sessions: ${runtimeStatus.totalSessionCount}</div><div>${runtimeStatus.analyticsWindowDays}d sessions: ${runtimeStatus.analyticsWindowSessionCount}</div></div>` : ''}
   <div class="mb-actions"><a class="mb-action-btn mb-action-btn-primary" href="/">Open Dashboard</a></div>
   ${buildThemeScript()}
 </body></html>`;
@@ -2233,6 +2413,7 @@ function main(): void {
   try {
     database = new TtmDatabase();
     readService = new TtmReadService(database);
+    desktopDatabaseResolution = database.resolution;
   } catch (error) {
     process.stderr.write(`failed to initialize database: ${String(error)}\n`);
     process.exit(1);
@@ -2242,7 +2423,7 @@ function main(): void {
   setupFileWatcher(dbPath, prefs);
 
   const server = createServer((request, response) => {
-    handleRequest(request, response, readService as TtmReadService);
+    handleRequest(request, response, readService as TtmReadService, prefs);
   });
 
   server.listen(PORT, '127.0.0.1', () => {
