@@ -127,7 +127,7 @@ function buildErrorHtml(surface: DesktopSurface, message: string, runtimeStatus?
 function buildEmptyHtml(surface: DesktopSurface, runtimeStatus: DesktopRuntimeStatus, kind: EmptyStateKind): string {
   const title = surface === 'analytics' ? 'Analytics' : 'Overview';
   const body = kind === 'no-window-data'
-    ? `No sessions were found in the last ${runtimeStatus.analyticsWindowDays} days, but Token Tracker can still see historical data in the active database.`
+    ? 'No sessions matched the current view, but Token Tracker can still see historical data in the active database.'
     : 'No data has been imported into the active local database yet.';
   const hint = kind === 'no-window-data'
     ? '<p class="empty" style="margin-top:12px">Try a wider time window or inspect the runtime diagnostics below before assuming imports are missing.</p>'
@@ -654,7 +654,7 @@ function buildOverviewHero(
   totalCost: number,
   contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null,
   activeSurfacePanel: DesktopActiveSurfacePanelData | null,
-  activePeriod: string = '1d',
+  activePeriod: string = '1m',
 ): string {
   const successScores = snapshot.providerSummaries.filter((summary) => summary.averageSuccessScore !== null);
   const avgSuccess = successScores.length > 0
@@ -772,7 +772,7 @@ function buildOverviewTrendActivity(snapshot: ReadSummarySnapshot, sessions: Sto
   </section>`;
 }
 
-function buildOverviewProviderIntegrity(snapshot: ReadSummarySnapshot, activeSurfacePanel: DesktopActiveSurfacePanelData | null, activePeriod: string = '1d'): string {
+function buildOverviewProviderIntegrity(snapshot: ReadSummarySnapshot, activeSurfacePanel: DesktopActiveSurfacePanelData | null, activePeriod: string = '1m'): string {
   const providers = snapshot.providerSummaries
     .slice()
     .sort((left, right) => (right.averageEfficiency ?? 0) - (left.averageEfficiency ?? 0))
@@ -1112,7 +1112,7 @@ function buildActiveSurfaceTruthSection(panel: DesktopActiveSurfacePanelData): s
   </div>`;
 }
 
-function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessionListItem[], activeProvider: string | null, activeModel: string | null, activeQ: string | null, listResult: { sessions: StoredSessionListItem[]; total: number; page: number; pageSize: number; totalPages: number } | null, modelOptions: { model: string; sessionCount: number }[], contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null, activeSurfacePanel: DesktopActiveSurfacePanelData | null, activePeriod: string = '1d'): string {
+function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessionListItem[], activeProvider: string | null, activeModel: string | null, activeQ: string | null, listResult: { sessions: StoredSessionListItem[]; total: number; page: number; pageSize: number; totalPages: number } | null, modelOptions: { model: string; sessionCount: number }[], contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null, activeSurfacePanel: DesktopActiveSurfacePanelData | null, activePeriod: string = '1m'): string {
   const totalTokens = snapshot.providerSummaries.reduce((s: number, p: SessionSummary) => s + p.totalTokens, 0);
   const totalCost = snapshot.providerSummaries.reduce((s: number, p: SessionSummary) => s + p.totalCostUsd, 0);
   const providerRows = snapshot.providerSummaries.length > 0
@@ -1826,7 +1826,7 @@ function parseUrlPath(rawUrl: string): { path: string; sessionId: string | null;
   let q: string | null = null;
   let page = 1;
   let mode: string | null = null;
-  let period: string | null = '1d';
+  let period: string | null = '1m';
   for (const param of query.split('&')) {
     const [key, value] = param.split('=');
     if (key === 'session' && value) {
@@ -1982,7 +1982,7 @@ function handleRequest(
   if (path === '/export/analytics-svg') {
     let analytics: ReadAnalyticsSnapshot | null = null;
     let error: string | null = null;
-    let activePeriod = '1d';
+    let activePeriod = '1m';
 
     const exportUrlParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
     const periodParam = exportUrlParams.get('period');
@@ -2029,7 +2029,7 @@ function handleRequest(
     let error: string | null = null;
     const compactMode = mode === 'minimal' ? 'minimal' : 'detailed';
     let runtimeStatus: DesktopRuntimeStatus | null = null;
-    const activePeriod = period ?? '1d';
+    const activePeriod = period ?? '1m';
 
     try {
       runtimeStatus = getRuntimeStatus(readService, prefs);
@@ -2158,7 +2158,7 @@ function handleRequest(
   if (path === '/analytics') {
     let analytics: ReadAnalyticsSnapshot | null = null;
     let error: string | null = null;
-    let activePeriod = period ?? '1d';
+    let activePeriod = period ?? '1m';
     let activeSurfacePanel: DesktopActiveSurfacePanelData | null = null;
     let runtimeStatus: DesktopRuntimeStatus | null = null;
 
@@ -2234,7 +2234,7 @@ function handleRequest(
     let sessions: StoredSessionListItem[] = [];
     let listResult: { sessions: StoredSessionListItem[]; total: number; page: number; pageSize: number; totalPages: number } | null = null;
     let error: string | null = null;
-    const activePeriod = (period ?? '1d') as '1h' | '1d' | '7d' | '1m' | 'all';
+    const activePeriod = (period ?? '1m') as '1h' | '1d' | '7d' | '1m' | 'all';
 
     try {
       snapshot = readService.getSummarySnapshotForPeriod(activePeriod);
@@ -2254,7 +2254,12 @@ function handleRequest(
 
     if (!snapshot || snapshot.sessionCount === 0) {
       response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      response.end(buildEmptyHtml('overview', getRuntimeStatus(readService, prefs), 'no-imported-data'));
+      const runtimeStatus = getRuntimeStatus(readService, prefs);
+      response.end(buildEmptyHtml(
+        'overview',
+        runtimeStatus,
+        runtimeStatus.totalSessionCount > 0 ? 'no-window-data' : 'no-imported-data',
+      ));
       return;
     }
 
@@ -2290,7 +2295,7 @@ function handleRequest(
     }
 
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    response.end(buildOverviewHtml(snapshot, sessions, provider, model, q, listResult, modelOptions, contextHealth, activeSurfacePanel, period ?? '1d'));
+    response.end(buildOverviewHtml(snapshot, sessions, provider, model, q, listResult, modelOptions, contextHealth, activeSurfacePanel, period ?? '1m'));
     return;
   }
 

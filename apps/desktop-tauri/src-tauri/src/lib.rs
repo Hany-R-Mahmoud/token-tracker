@@ -7,8 +7,8 @@ use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconEvent},
-    AppHandle, Manager, PhysicalPosition, Position, Rect, WebviewUrl, WebviewWindowBuilder,
-    WindowEvent, Wry,
+    AppHandle, Manager, PhysicalPosition, Position, Rect, RunEvent, WebviewUrl,
+    WebviewWindowBuilder, WindowEvent, Wry,
 };
 static TRAY_COST_CENTS: AtomicU32 = AtomicU32::new(0);
 
@@ -572,6 +572,26 @@ fn runtime_endpoint(app: &AppHandle) -> Option<DesktopRuntimeEndpoint> {
     guard.clone()
 }
 
+fn stop_desktop_server(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+
+    if let Ok(mut server_guard) = state.desktop_server.lock() {
+        if let Some(mut child) = server_guard.take() {
+            if let Err(error) = child.kill() {
+                log::warn!("Failed to stop bundled desktop runtime: {}", error);
+            }
+            let _ = child.wait();
+        }
+    }
+
+    let endpoint_lock = state.runtime_endpoint.lock();
+    if let Ok(mut endpoint_guard) = endpoint_lock {
+        *endpoint_guard = None;
+    }
+}
+
 fn ensure_desktop_server(app: &AppHandle) -> tauri::Result<bool> {
     if let Some(endpoint) = runtime_endpoint(app) {
         if desktop_server_is_ready(&endpoint) {
@@ -589,12 +609,26 @@ fn ensure_desktop_server(app: &AppHandle) -> tauri::Result<bool> {
             return Ok(false);
         };
 
+        let endpoint_ready = runtime_endpoint(app)
+            .as_ref()
+            .map(desktop_server_is_ready)
+            .unwrap_or(false);
         let needs_spawn = match server_guard.as_mut() {
-            Some(child) => child.try_wait().ok().flatten().is_some(),
+            Some(child) => {
+                let child_exited = child.try_wait().ok().flatten().is_some();
+                child_exited || !endpoint_ready
+            }
             None => true,
         };
 
         if needs_spawn {
+            if let Some(mut child) = server_guard.take() {
+                if let Err(error) = child.kill() {
+                    log::warn!("Failed to stop stale bundled desktop runtime before respawn: {}", error);
+                }
+                let _ = child.wait();
+            }
+
             let runtime_dir = desktop_runtime_dir(app)?;
             let node_path = runtime_dir.join("bin/node");
             let server_entry = runtime_dir.join("apps/desktop/dist/index.js");
@@ -927,7 +961,7 @@ fn poll_notification_and_deliver(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_active_window,
             get_open_windows,
@@ -1002,6 +1036,12 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app, event| {
+        if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
+            stop_desktop_server(app);
+        }
+    });
 }

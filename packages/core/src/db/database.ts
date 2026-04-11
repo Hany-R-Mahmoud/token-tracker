@@ -755,6 +755,12 @@ export class TtmDatabase implements AdapterStorage {
     return this.getSessionCountForWindowDays(Math.ceil(windowHours / 24));
   }
 
+  public getSessionCountForWindowDaysOrHours(value: number, unit: 'days' | 'hours'): number {
+    return unit === 'hours'
+      ? this.getSessionCountForWindowHours(value)
+      : this.getSessionCountForWindowDays(value);
+  }
+
   public getProviderSummariesForWindow(days: number): SessionSummary[] {
     const rows = this.database.prepare(`
       SELECT

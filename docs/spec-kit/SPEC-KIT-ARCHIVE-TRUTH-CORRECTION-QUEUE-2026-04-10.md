@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-10  
 **Audience:** OpenCode  
-**Purpose:** Detailed execution queue for correcting the highest-priority archive and implementation-truth mismatches discovered in the repo-wide audit  
+**Purpose:** Detailed execution queue for correcting the highest-priority archive and implementation-truth mismatches discovered in the repo-wide audit
 
 ---
 
@@ -175,21 +175,14 @@ No archive wording implies the unresolved security items are already shipped.
 - Phase 007
 - Phase 011
 
-### Objective
+### Status: **COMPLETE** (Correction Pass 02)
 
-Tighten archive honesty for phases that are currently `PARTIAL` but lower-risk
-than the top three queue items.
+### What was done:
 
-### Expected Work
-
-- confirm whether the `PARTIAL` label is still accurate
-- correct any overstated success wording
-- clarify remaining gaps precisely
-
-### Success Condition
-
-Each target phase archive communicates the current truth in a clean, minimal,
-future-readable way.
+- Phase 002: No correction needed — report was honest about partial status
+- Phase 005: No correction needed — report was honest about partial status; web UI was later built
+- Phase 007: Added reconciliation note explaining gaps were resolved by Phase 009
+- Phase 011: Added reconciliation note documenting the three defects that required a correction pass
 
 ---
 
@@ -200,21 +193,12 @@ future-readable way.
 - Phase 008
 - Phase 017
 
-### Objective
+### Status: **COMPLETE** (Correction Pass 02)
 
-Replace vague or underspecified archive language with honest review-phase
-language.
+### What was done:
 
-### Expected Work
-
-- clarify what was reviewed
-- clarify what was not implemented
-- state explicitly why the phase remains `UNVERIFIED` or review-only
-
-### Success Condition
-
-Readers can understand the status of the phase without mistaking review work for
-implemented work.
+- Phase 008: Created `archive-status-note.md` explaining UNVERIFIED classification, documenting the security review work, and pointing to the actual security status documents
+- Phase 017: Created `archive-status-note.md` explaining UNVERIFIED classification, documenting the reconciliation goals, and confirming the archive corrections were completed in Correction Pass 01
 
 ---
 

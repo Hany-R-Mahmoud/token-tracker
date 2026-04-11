@@ -83,7 +83,7 @@ export class TtmReadService {
     }));
     return {
       databasePath: this.database.path,
-      sessionCount: this.database.getSessionCountForWindow(days),
+      sessionCount: this.database.getSessionCountForWindowDaysOrHours(days, 'days'),
       providerSummaries: this.database.getProviderSummariesForWindow(days),
       modelSummaries: this.database.getModelSummariesForWindow(days),
       dailyBuckets: this.database.getDailyBuckets(days),

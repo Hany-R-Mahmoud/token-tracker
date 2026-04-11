@@ -25,7 +25,7 @@ This audit examined all archived phases (001-018) by comparing documented intent
 
 1. **TypeScript compilation errors** — Reported in Phases 002, 004, 005, 006, 007, 009 as blocking, but now passes
 2. **Database migration** — Node.js SQLite `ALTER TABLE ADD COLUMN IF NOT EXISTS` never resolved
-3. **Security fixes (M3, M5, M6)** — Implemented in 2026-04-05 remediation pass; audit report originally flagged as unimplemented but `docs/security-status-2026-04-05-current.md` confirms they were addressed
+3. **Security fixes (M3, M5, M6)** — All three implemented. M3: rate limiting in both desktop and web (60 req/min). M5: CLI export path validation. M6: Tauri IPC authentication via shared secret. See `SPEC-KIT-QWEN-WEB-RATE-LIMITING-CLOSURE-REPORT-2026-04-10.md` for M3 web implementation evidence.
 4. **Desktop UI success analysis** — Implemented; Phase 017 verified claims
 5. **CLI success analysis output** — Implemented; Phase 017 verified claims
 
@@ -423,14 +423,13 @@ This audit examined all archived phases (001-018) by comparing documented intent
 - **Status:** Now resolved (typecheck passes)
 - **Pattern:** Same error reported across 6 phases without permanent fix
 
-### Pattern 2: Security Fixes — Originally Flagged, Later Remediated
+### Pattern 2: Security Fixes — Originally Flagged, Now Remediated
 
 - **Appears in:** Phases 004, 006
 - **Finding:** M3 (rate limiting), M5 (path validation), M6 (TLS pinning / IPC auth)
-- **Status:** Implemented in 2026-04-05 remediation pass
-- **Evidence:** `docs/security-status-2026-04-05-current.md` confirms all three as FIXED
-- **Note:** M6 was addressed via shared-secret API key authentication for Tauri IPC rather than literal TLS certificate pinning. This is an acceptable control for localhost IPC.
-- **Pattern:** This audit originally flagged these as "never implemented" without accounting for the remediation pass
+- **Status:** All three implemented. M3: rate limiting in both desktop and web (60 req/min per IP). M5: CLI export path validation. M6: Tauri IPC authentication via shared secret.
+- **Evidence:** `SPEC-KIT-QWEN-WEB-RATE-LIMITING-CLOSURE-REPORT-2026-04-10.md` for M3 web implementation; `SPEC-KIT-QWEN-SECURITY-DEBT-CLOSURE-REPORT-2026-04-10.md` for full verification
+- **Note:** M6 was addressed via shared-secret API key authentication for Tauri IPC rather than literal TLS certificate pinning. Acceptable for localhost IPC.
 
 ### Pattern 3: Gap-Closure Phases Indicating Overclaiming
 

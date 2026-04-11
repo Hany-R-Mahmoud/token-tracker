@@ -1,20 +1,39 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { TtmDatabase, defaultDatabasePath } from '@ttm/core';
-import { LeaderboardDatabase, defaultLeaderboardDatabasePath } from './db.js';
-import { computeLeaderboardSnapshot, type SessionData, MINIMUM_PARTICIPATION_THRESHOLD } from './scoring.js';
-import { syncLocalSessions } from './ingestion.js';
-import { TTM_PRIVACY_POLICY } from '@ttm/core';
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import { randomUUID, timingSafeEqual } from "node:crypto";
+import { TtmDatabase, defaultDatabasePath } from "@ttm/core";
+import { LeaderboardDatabase, defaultLeaderboardDatabasePath } from "./db.js";
+import {
+  computeLeaderboardSnapshot,
+  type SessionData,
+  MINIMUM_PARTICIPATION_THRESHOLD,
+} from "./scoring.js";
+import { syncLocalSessions } from "./ingestion.js";
+import { TTM_PRIVACY_POLICY } from "@ttm/core";
 
-const PORT = Number(process.env.TTM_WEB_PORT ?? '3200');
-const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID ?? '';
-const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET ?? '';
-const DEFAULT_TEAM_ID = process.env.TTM_DEFAULT_TEAM_ID ?? 'default-team';
-const DEFAULT_TEAM_NAME = process.env.TTM_DEFAULT_TEAM_NAME ?? 'Default Team';
-const ADMIN_API_KEY = process.env.TTM_ADMIN_API_KEY ?? '';
-const WEB_ORIGIN = process.env.TTM_WEB_ORIGIN ?? '';
-const SESSION_COOKIE_NAME = 'ttm_session';
+const PORT = Number(process.env.TTM_WEB_PORT ?? "3200");
+const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID ?? "";
+const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET ?? "";
+const DEFAULT_TEAM_ID = process.env.TTM_DEFAULT_TEAM_ID ?? "default-team";
+const DEFAULT_TEAM_NAME = process.env.TTM_DEFAULT_TEAM_NAME ?? "Default Team";
+const ADMIN_API_KEY = process.env.TTM_ADMIN_API_KEY ?? "";
+const WEB_ORIGIN = process.env.TTM_WEB_ORIGIN ?? "";
+const SESSION_COOKIE_NAME = "ttm_session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+
+// Rate limiting — matches desktop app thresholds
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX_REQUESTS = 60;
+
+interface RateLimitEntry {
+  count: number;
+  windowStart: number;
+}
+
+const rateLimitStore = new Map<string, RateLimitEntry>();
 
 export interface GitHubOAuthUser {
   githubId: number;
@@ -130,7 +149,7 @@ const STYLES = `
   code, pre { font-family: "Geist Mono", "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; }
 `;
 
-function buildBrandLockup(label = 'Token Tracker'): string {
+function buildBrandLockup(label = "Token Tracker"): string {
   return `<span class="brand-lockup">
     <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
       <g fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter">
@@ -144,17 +163,23 @@ function buildBrandLockup(label = 'Token Tracker'): string {
   </span>`;
 }
 
-function buildWebNav(active: 'home' | 'settings' | 'leaderboard'): string {
+function buildWebNav(active: "home" | "settings" | "leaderboard"): string {
   return `<nav class="nav">
-    <span class="nav-brand">${buildBrandLockup('Token Tracker')}</span>
-    <a href="/"${active === 'home' ? ' class="active"' : ''}>Home</a>
-    <a href="/settings"${active === 'settings' ? ' class="active"' : ''}>Settings</a>
-    <a href="/leaderboard"${active === 'leaderboard' ? ' class="active"' : ''}>Leaderboard</a>
+    <span class="nav-brand">${buildBrandLockup("Token Tracker")}</span>
+    <a href="/"${active === "home" ? ' class="active"' : ""}>Home</a>
+    <a href="/settings"${active === "settings" ? ' class="active"' : ""}>Settings</a>
+    <a href="/leaderboard"${active === "leaderboard" ? ' class="active"' : ""}>Leaderboard</a>
   </nav>`;
 }
 
 function escapeHtml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;').replace(/`/g, '&#x60;');
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;")
+    .replace(/`/g, "&#x60;");
 }
 
 function formatNumber(value: number): string {
@@ -165,12 +190,16 @@ function formatNumber(value: number): string {
 }
 
 function encodeMemberPayload(value: object): string {
-  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64');
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64");
 }
 
-function parseUrlPath(rawUrl: string): { path: string; query: Record<string, string> } {
-  const queryStringIndex = rawUrl.indexOf('?');
-  const path = queryStringIndex >= 0 ? rawUrl.slice(0, queryStringIndex) : rawUrl;
+function parseUrlPath(rawUrl: string): {
+  path: string;
+  query: Record<string, string>;
+} {
+  const queryStringIndex = rawUrl.indexOf("?");
+  const path =
+    queryStringIndex >= 0 ? rawUrl.slice(0, queryStringIndex) : rawUrl;
   const query: Record<string, string> = {};
   if (queryStringIndex >= 0) {
     const params = new URLSearchParams(rawUrl.slice(queryStringIndex + 1));
@@ -186,136 +215,160 @@ function parseCookies(header: string | undefined): Record<string, string> {
     return {};
   }
 
-  return header.split(';').reduce<Record<string, string>>((cookies, pair) => {
-    const [rawKey, ...rawValue] = pair.trim().split('=');
+  return header.split(";").reduce<Record<string, string>>((cookies, pair) => {
+    const [rawKey, ...rawValue] = pair.trim().split("=");
     if (!rawKey) {
       return cookies;
     }
 
-    cookies[rawKey] = decodeURIComponent(rawValue.join('='));
+    cookies[rawKey] = decodeURIComponent(rawValue.join("="));
     return cookies;
   }, {});
 }
 
 function resolveOrigin(req: IncomingMessage, configuredOrigin: string): string {
   if (configuredOrigin) {
-    return configuredOrigin.replace(/\/$/, '');
+    return configuredOrigin.replace(/\/$/, "");
   }
 
-  const forwardedProto = req.headers['x-forwarded-proto'];
-  const protocol = typeof forwardedProto === 'string' && forwardedProto.length > 0
-    ? forwardedProto
-    : 'http';
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const protocol =
+    typeof forwardedProto === "string" && forwardedProto.length > 0
+      ? forwardedProto
+      : "http";
   const host = req.headers.host ?? `localhost:${PORT}`;
 
   return `${protocol}://${host}`;
 }
 
 function buildSessionCookie(sessionId: string, req: IncomingMessage): string {
-  const forwardedProto = req.headers['x-forwarded-proto'];
-  const isSecure = process.env.NODE_ENV === 'production'
-    || (typeof forwardedProto === 'string' && forwardedProto === 'https');
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const isSecure =
+    process.env.NODE_ENV === "production" ||
+    (typeof forwardedProto === "string" && forwardedProto === "https");
 
   const parts = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(sessionId)}`,
-    'HttpOnly',
-    'SameSite=Strict',
-    'Path=/',
+    "HttpOnly",
+    "SameSite=Strict",
+    "Path=/",
     `Max-Age=${SESSION_MAX_AGE_SECONDS}`,
   ];
 
   if (isSecure) {
-    parts.push('Secure');
+    parts.push("Secure");
   }
 
-  return parts.join('; ');
+  return parts.join("; ");
 }
 
 function buildClearedSessionCookie(req: IncomingMessage): string {
-  const forwardedProto = req.headers['x-forwarded-proto'];
-  const isSecure = process.env.NODE_ENV === 'production'
-    || (typeof forwardedProto === 'string' && forwardedProto === 'https');
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const isSecure =
+    process.env.NODE_ENV === "production" ||
+    (typeof forwardedProto === "string" && forwardedProto === "https");
 
   const parts = [
     `${SESSION_COOKIE_NAME}=`,
-    'HttpOnly',
-    'SameSite=Strict',
-    'Path=/',
-    'Max-Age=0',
+    "HttpOnly",
+    "SameSite=Strict",
+    "Path=/",
+    "Max-Age=0",
   ];
 
   if (isSecure) {
-    parts.push('Secure');
+    parts.push("Secure");
   }
 
-  return parts.join('; ');
+  return parts.join("; ");
 }
 
 function buildClearedOAuthStateCookie(req: IncomingMessage): string {
-  const forwardedProto = req.headers['x-forwarded-proto'];
-  const isSecure = process.env.NODE_ENV === 'production'
-    || (typeof forwardedProto === 'string' && forwardedProto === 'https');
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const isSecure =
+    process.env.NODE_ENV === "production" ||
+    (typeof forwardedProto === "string" && forwardedProto === "https");
 
   const parts = [
-    'oauth_state=',
-    'HttpOnly',
-    'SameSite=Strict',
-    'Path=/',
-    'Max-Age=0',
+    "oauth_state=",
+    "HttpOnly",
+    "SameSite=Strict",
+    "Path=/",
+    "Max-Age=0",
   ];
 
   if (isSecure) {
-    parts.push('Secure');
+    parts.push("Secure");
   }
 
-  return parts.join('; ');
+  return parts.join("; ");
 }
 
 function buildOAuthStateCookie(state: string, req: IncomingMessage): string {
-  const forwardedProto = req.headers['x-forwarded-proto'];
-  const isSecure = process.env.NODE_ENV === 'production'
-    || (typeof forwardedProto === 'string' && forwardedProto === 'https');
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const isSecure =
+    process.env.NODE_ENV === "production" ||
+    (typeof forwardedProto === "string" && forwardedProto === "https");
 
   const parts = [
     `oauth_state=${encodeURIComponent(state)}`,
-    'HttpOnly',
-    'SameSite=Strict',
-    'Path=/',
-    'Max-Age=600',
+    "HttpOnly",
+    "SameSite=Strict",
+    "Path=/",
+    "Max-Age=600",
   ];
 
   if (isSecure) {
-    parts.push('Secure');
+    parts.push("Secure");
   }
 
-  return parts.join('; ');
+  return parts.join("; ");
 }
 
-function createDefaultGitHubOAuthClient(clientId: string, clientSecret: string): GitHubOAuthClient {
+function createDefaultGitHubOAuthClient(
+  clientId: string,
+  clientSecret: string,
+): GitHubOAuthClient {
   return {
-    async exchangeCodeForToken(code: string, redirectUri: string): Promise<string> {
-      const response = await fetch('https://github.com/login/oauth/access_token', {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          'User-Agent': 'Token-Tracker-Team-Web',
+    async exchangeCodeForToken(
+      code: string,
+      redirectUri: string,
+    ): Promise<string> {
+      const response = await fetch(
+        "https://github.com/login/oauth/access_token",
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "Token-Tracker-Team-Web",
+          },
+          body: JSON.stringify({
+            client_id: clientId,
+            client_secret: clientSecret,
+            code,
+            redirect_uri: redirectUri,
+          }),
         },
-        body: JSON.stringify({
-          client_id: clientId,
-          client_secret: clientSecret,
-          code,
-          redirect_uri: redirectUri,
-        }),
-      });
+      );
 
       if (!response.ok) {
-        throw new Error(`GitHub token exchange failed with status ${response.status}`);
+        throw new Error(
+          `GitHub token exchange failed with status ${response.status}`,
+        );
       }
 
-      const payload = await response.json() as { access_token?: string; error?: string; error_description?: string };
+      const payload = (await response.json()) as {
+        access_token?: string;
+        error?: string;
+        error_description?: string;
+      };
       if (!payload.access_token) {
-        throw new Error(payload.error_description ?? payload.error ?? 'GitHub token exchange returned no access token');
+        throw new Error(
+          payload.error_description ??
+            payload.error ??
+            "GitHub token exchange returned no access token",
+        );
       }
 
       return payload.access_token;
@@ -323,18 +376,22 @@ function createDefaultGitHubOAuthClient(clientId: string, clientSecret: string):
 
     async fetchUser(accessToken: string): Promise<GitHubOAuthUser> {
       const headers = {
-        Accept: 'application/vnd.github+json',
+        Accept: "application/vnd.github+json",
         Authorization: `Bearer ${accessToken}`,
-        'User-Agent': 'Token-Tracker-Team-Web',
-        'X-GitHub-Api-Version': '2022-11-28',
+        "User-Agent": "Token-Tracker-Team-Web",
+        "X-GitHub-Api-Version": "2022-11-28",
       };
 
-      const userResponse = await fetch('https://api.github.com/user', { headers });
+      const userResponse = await fetch("https://api.github.com/user", {
+        headers,
+      });
       if (!userResponse.ok) {
-        throw new Error(`GitHub user fetch failed with status ${userResponse.status}`);
+        throw new Error(
+          `GitHub user fetch failed with status ${userResponse.status}`,
+        );
       }
 
-      const user = await userResponse.json() as {
+      const user = (await userResponse.json()) as {
         id: number;
         login: string;
         name: string | null;
@@ -344,15 +401,19 @@ function createDefaultGitHubOAuthClient(clientId: string, clientSecret: string):
 
       let email = user.email;
       if (!email) {
-        const emailResponse = await fetch('https://api.github.com/user/emails', { headers });
+        const emailResponse = await fetch(
+          "https://api.github.com/user/emails",
+          { headers },
+        );
         if (emailResponse.ok) {
-          const emails = await emailResponse.json() as Array<{
+          const emails = (await emailResponse.json()) as Array<{
             email: string;
             primary: boolean;
             verified: boolean;
           }>;
-          const primaryEmail = emails.find((entry) => entry.primary && entry.verified)
-            ?? emails.find((entry) => entry.verified);
+          const primaryEmail =
+            emails.find((entry) => entry.primary && entry.verified) ??
+            emails.find((entry) => entry.verified);
           email = primaryEmail?.email ?? null;
         }
       }
@@ -370,14 +431,22 @@ function createDefaultGitHubOAuthClient(clientId: string, clientSecret: string):
 
 function periodToDays(period: string): number {
   switch (period) {
-    case 'week': return 7;
-    case 'month': return 30;
-    case 'all_time': return 3650; // ~10 years
-    default: return 30;
+    case "week":
+      return 7;
+    case "month":
+      return 30;
+    case "all_time":
+      return 3650; // ~10 years
+    default:
+      return 30;
   }
 }
 
-function computeAndSaveSnapshot(db: LeaderboardDatabase, teamId: string, windowDays: number = 30): void {
+function computeAndSaveSnapshot(
+  db: LeaderboardDatabase,
+  teamId: string,
+  windowDays: number = 30,
+): void {
   const members = db.getOptedInMembers(teamId);
   if (members.length === 0) return;
 
@@ -397,22 +466,41 @@ function computeAndSaveSnapshot(db: LeaderboardDatabase, teamId: string, windowD
     }
 
     const totalTokens = userSessions.reduce((sum, s) => sum + s.tokenTotal, 0);
-    const totalCostUsd = userSessions.reduce((sum, s) => sum + s.costTotalUsd, 0);
-    const efficiencies = userSessions.map((s) => s.efficiencyScore).filter((e): e is number => e !== null);
-    const cacheRates = userSessions.map((s) => s.cacheHitRate).filter((c): c is number => c !== null);
-    const wasteScores = userSessions.map((s) => s.wasteScore).filter((w): w is number => w !== null);
+    const totalCostUsd = userSessions.reduce(
+      (sum, s) => sum + s.costTotalUsd,
+      0,
+    );
+    const efficiencies = userSessions
+      .map((s) => s.efficiencyScore)
+      .filter((e): e is number => e !== null);
+    const cacheRates = userSessions
+      .map((s) => s.cacheHitRate)
+      .filter((c): c is number => c !== null);
+    const wasteScores = userSessions
+      .map((s) => s.wasteScore)
+      .filter((w): w is number => w !== null);
     const outcomes = userSessions.map((s) => s.outcome);
-    const successCount = outcomes.filter((o) => o === 'success').length;
+    const successCount = outcomes.filter((o) => o === "success").length;
 
     return {
       userId: String(m.githubId),
       sessionCount: userSessions.length,
       totalTokens,
       totalCostUsd,
-      averageEfficiency: efficiencies.length > 0 ? efficiencies.reduce((a, b) => a + b, 0) / efficiencies.length : null,
-      averageCacheHitRate: cacheRates.length > 0 ? cacheRates.reduce((a, b) => a + b, 0) / cacheRates.length : null,
-      averageWasteScore: wasteScores.length > 0 ? wasteScores.reduce((a, b) => a + b, 0) / wasteScores.length : null,
-      outcomeSuccessRate: outcomes.length > 0 ? successCount / outcomes.length : null,
+      averageEfficiency:
+        efficiencies.length > 0
+          ? efficiencies.reduce((a, b) => a + b, 0) / efficiencies.length
+          : null,
+      averageCacheHitRate:
+        cacheRates.length > 0
+          ? cacheRates.reduce((a, b) => a + b, 0) / cacheRates.length
+          : null,
+      averageWasteScore:
+        wasteScores.length > 0
+          ? wasteScores.reduce((a, b) => a + b, 0) / wasteScores.length
+          : null,
+      outcomeSuccessRate:
+        outcomes.length > 0 ? successCount / outcomes.length : null,
     };
   });
 
@@ -430,7 +518,15 @@ function computeAndSaveSnapshot(db: LeaderboardDatabase, teamId: string, windowD
   db.saveSnapshot(snapshotId, teamId, windowDays, JSON.stringify(entries));
 }
 
-function buildHomePage(db: LeaderboardDatabase, githubUser: { githubId: number; username: string; displayName: string | null } | null, membership: { optedIn: boolean } | null): string {
+function buildHomePage(
+  db: LeaderboardDatabase,
+  githubUser: {
+    githubId: number;
+    username: string;
+    displayName: string | null;
+  } | null,
+  membership: { optedIn: boolean } | null,
+): string {
   const isConnected = githubUser !== null;
   const isOptedIn = membership?.optedIn ?? false;
 
@@ -439,27 +535,29 @@ function buildHomePage(db: LeaderboardDatabase, githubUser: { githubId: number; 
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — Team Leaderboard</title><style>${STYLES}</style></head>
 <body>
-  ${buildWebNav('home')}
+  ${buildWebNav("home")}
   <h1>Team Leaderboard</h1>
   <p class="subtitle">Private, team-scoped, efficiency-oriented ranking. Not a public leaderboard.</p>
 
   <div class="card">
     <h2>Connection Status</h2>
-    ${isConnected
-      ? `<p>Connected as <strong>${escapeHtml(githubUser.displayName ?? githubUser.username)}</strong> (<code>@${escapeHtml(githubUser.username)}</code>) <span class="status-badge status-connected">Connected</span></p>`
-      : `<p>Not connected to GitHub. <a href="/auth/github">Connect GitHub</a> to participate.</p>`
+    ${
+      isConnected
+        ? `<p>Connected as <strong>${escapeHtml(githubUser.displayName ?? githubUser.username)}</strong> (<code>@${escapeHtml(githubUser.username)}</code>) <span class="status-badge status-connected">Connected</span></p>`
+        : `<p>Not connected to GitHub. <a href="/auth/github">Connect GitHub</a> to participate.</p>`
     }
   </div>
 
-  <div class="card ${isOptedIn ? 'opt-in-card' : 'opt-out-card'}">
+  <div class="card ${isOptedIn ? "opt-in-card" : "opt-out-card"}">
     <h2>Leaderboard Visibility</h2>
-    ${!isConnected
-      ? '<p class="empty">Connect GitHub first to manage leaderboard visibility.</p>'
-      : isOptedIn
-        ? `<p>You are <strong>visible</strong> on the team leaderboard. <span class="status-badge status-opted-in">Opted In</span></p>
+    ${
+      !isConnected
+        ? '<p class="empty">Connect GitHub first to manage leaderboard visibility.</p>'
+        : isOptedIn
+          ? `<p>You are <strong>visible</strong> on the team leaderboard. <span class="status-badge status-opted-in">Opted In</span></p>
            <p style="font-size:12px;color:var(--text-secondary);margin-top:8px">Your aggregated efficiency stats are visible to teammates. Raw session data, prompts, and code are never shared.</p>
            <form method="post" action="/settings/opt-out" style="margin-top:12px"><button type="submit" class="btn btn-secondary">Opt Out</button></form>`
-        : `<p>You are <strong>not visible</strong> on the team leaderboard. <span class="status-badge status-opted-out">Opted Out</span></p>
+          : `<p>You are <strong>not visible</strong> on the team leaderboard. <span class="status-badge status-opted-out">Opted Out</span></p>
            <p style="font-size:12px;color:var(--text-secondary);margin-top:8px">Opt in to appear on the leaderboard with your aggregated efficiency stats.</p>
            <form method="post" action="/settings/opt-in" style="margin-top:12px"><button type="submit" class="btn">Opt In</button></form>`
     }
@@ -469,59 +567,75 @@ function buildHomePage(db: LeaderboardDatabase, githubUser: { githubId: number; 
     <h2>Privacy Policy</h2>
     <p style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Version ${escapeHtml(TTM_PRIVACY_POLICY.version)}</p>
     <h3 style="font-size:13px;font-weight:600;margin:8px 0 4px">What is shared when you opt in:</h3>
-    <ul class="privacy-list">${TTM_PRIVACY_POLICY.sharedData.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+    <ul class="privacy-list">${TTM_PRIVACY_POLICY.sharedData.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
     <h3 style="font-size:13px;font-weight:600;margin:8px 0 4px">What is NEVER shared:</h3>
-    <ul class="privacy-list">${TTM_PRIVACY_POLICY.neverSharedData.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+    <ul class="privacy-list">${TTM_PRIVACY_POLICY.neverSharedData.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
     <p style="font-size:12px;color:var(--text-secondary);margin-top:8px">Admins cannot override your visibility choice.</p>
   </div>
 </body></html>`;
 }
 
-function buildSettingsPage(db: LeaderboardDatabase, githubUser: { username: string; displayName: string | null } | null, membership: { optedIn: boolean } | null): string {
+function buildSettingsPage(
+  db: LeaderboardDatabase,
+  githubUser: { username: string; displayName: string | null } | null,
+  membership: { optedIn: boolean } | null,
+): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — Settings</title><style>${STYLES}</style></head>
 <body>
-  ${buildWebNav('settings')}
+  ${buildWebNav("settings")}
   <h1>Settings</h1>
   <p class="subtitle">Manage your GitHub connection and leaderboard preferences.</p>
 
   <div class="card">
     <h2>GitHub Connection</h2>
-    ${githubUser
-      ? `<p>Connected as <strong>${escapeHtml(githubUser.displayName ?? githubUser.username)}</strong></p>
+    ${
+      githubUser
+        ? `<p>Connected as <strong>${escapeHtml(githubUser.displayName ?? githubUser.username)}</strong></p>
          <form method="post" action="/auth/disconnect" style="margin-top:12px"><button type="submit" class="btn btn-danger">Disconnect GitHub</button></form>`
-      : `<p>Not connected.</p><a href="/auth/github" class="btn">Connect GitHub</a>`
+        : `<p>Not connected.</p><a href="/auth/github" class="btn">Connect GitHub</a>`
     }
   </div>
 
   <div class="card">
     <h2>Leaderboard Opt-In</h2>
-    ${!githubUser
-      ? '<p class="empty">Connect GitHub first.</p>'
-      : membership?.optedIn
-        ? '<p>You are currently <strong>opted in</strong> to the team leaderboard.</p><form method="post" action="/settings/opt-out"><button type="submit" class="btn btn-secondary">Opt Out</button></form>'
-        : '<p>You are currently <strong>opted out</strong> of the team leaderboard.</p><form method="post" action="/settings/opt-in"><button type="submit" class="btn">Opt In</button></form>'
+    ${
+      !githubUser
+        ? '<p class="empty">Connect GitHub first.</p>'
+        : membership?.optedIn
+          ? '<p>You are currently <strong>opted in</strong> to the team leaderboard.</p><form method="post" action="/settings/opt-out"><button type="submit" class="btn btn-secondary">Opt Out</button></form>'
+          : '<p>You are currently <strong>opted out</strong> of the team leaderboard.</p><form method="post" action="/settings/opt-in"><button type="submit" class="btn">Opt In</button></form>'
     }
   </div>
 </body></html>`;
 }
 
-function buildLeaderboardPage(db: LeaderboardDatabase, teamId: string, githubId: number | null, period: string): string {
+function buildLeaderboardPage(
+  db: LeaderboardDatabase,
+  teamId: string,
+  githubId: number | null,
+  period: string,
+): string {
   const windowDays = periodToDays(period);
   computeAndSaveSnapshot(db, teamId, windowDays);
 
   const snapshot = db.getSnapshot(teamId, windowDays);
   const team = db.getTeam(teamId);
   const members = db.getOptedInMembers(teamId);
-  const currentMembership = githubId ? db.getMembership(githubId, teamId) : null;
+  const currentMembership = githubId
+    ? db.getMembership(githubId, teamId)
+    : null;
 
   // Find current user's rank
   let myRank: { rank: number; totalMembers: number } | null = null;
   if (snapshot && githubId) {
     try {
-      const entries = JSON.parse(snapshot.entriesJson) as Array<{ rank: number; githubId: number }>;
+      const entries = JSON.parse(snapshot.entriesJson) as Array<{
+        rank: number;
+        githubId: number;
+      }>;
       const myEntry = entries.find((e) => e.githubId === githubId);
       if (myEntry) {
         myRank = { rank: myEntry.rank, totalMembers: entries.length };
@@ -532,7 +646,7 @@ function buildLeaderboardPage(db: LeaderboardDatabase, teamId: string, githubId:
   }
 
   // My Rank card
-  let myRankCard = '';
+  let myRankCard = "";
   if (myRank) {
     myRankCard = `<div class="card" style="border-left:4px solid var(--accent)">
       <h2>My Rank</h2>
@@ -548,19 +662,23 @@ function buildLeaderboardPage(db: LeaderboardDatabase, teamId: string, githubId:
 
   // Period tabs with functional links
   const periods = [
-    { key: 'week', label: 'Week' },
-    { key: 'month', label: '30 days' },
-    { key: 'all_time', label: 'All time' },
+    { key: "week", label: "Week" },
+    { key: "month", label: "30 days" },
+    { key: "all_time", label: "All time" },
   ];
   const periodTabs = `<div style="display:flex;gap:8px;margin-bottom:16px">
-    ${periods.map((p) => {
-      const isActive = p.key === period;
-      const cls = isActive ? 'status-badge" style="background:var(--accent);color:#003828' : 'status-badge" style="background:var(--bg-panel-strong);color:var(--text-secondary)';
-      return `<a href="/leaderboard?period=${p.key}" class="${cls}">${p.label}</a>`;
-    }).join('')}
+    ${periods
+      .map((p) => {
+        const isActive = p.key === period;
+        const cls = isActive
+          ? 'status-badge" style="background:var(--accent);color:#003828'
+          : 'status-badge" style="background:var(--bg-panel-strong);color:var(--text-secondary)';
+        return `<a href="/leaderboard?period=${p.key}" class="${cls}">${p.label}</a>`;
+      })
+      .join("")}
   </div>`;
 
-  let entriesHtml = '';
+  let entriesHtml = "";
   if (snapshot) {
     try {
       const entries = JSON.parse(snapshot.entriesJson) as Array<{
@@ -577,26 +695,35 @@ function buildLeaderboardPage(db: LeaderboardDatabase, teamId: string, githubId:
         githubId: number;
       }>;
 
-      entriesHtml = entries.map((e) => {
-        const successRate = e.outcomeSuccessRate !== null ? `${(e.outcomeSuccessRate * 100).toFixed(0)}%` : '—';
-        const cacheRate = e.averageCacheHitRate !== null ? `${(e.averageCacheHitRate * 100).toFixed(0)}%` : '—';
-        const isCurrentUser = e.githubId === githubId;
-        const rowStyle = isCurrentUser ? 'style="background:rgba(163,255,217,0.08)"' : '';
-        const memberData = encodeMemberPayload({
-          displayName: e.displayName ?? e.username,
-          username: e.username,
-          efficiencyScore: e.efficiencyScore,
-          sessionCount: e.sessionCount,
-          totalTokens: e.totalTokens,
-          totalCostUsd: e.totalCostUsd,
-          averageCacheHitRate: e.averageCacheHitRate,
-          outcomeSuccessRate: e.outcomeSuccessRate,
-          period,
-          windowDays,
-        });
-        return `<tr class="leaderboard-row" tabindex="0" role="button" aria-label="View details for ${escapeHtml(e.displayName ?? e.username)}" data-member-b64="${memberData}" ${rowStyle}>
+      entriesHtml = entries
+        .map((e) => {
+          const successRate =
+            e.outcomeSuccessRate !== null
+              ? `${(e.outcomeSuccessRate * 100).toFixed(0)}%`
+              : "—";
+          const cacheRate =
+            e.averageCacheHitRate !== null
+              ? `${(e.averageCacheHitRate * 100).toFixed(0)}%`
+              : "—";
+          const isCurrentUser = e.githubId === githubId;
+          const rowStyle = isCurrentUser
+            ? 'style="background:rgba(163,255,217,0.08)"'
+            : "";
+          const memberData = encodeMemberPayload({
+            displayName: e.displayName ?? e.username,
+            username: e.username,
+            efficiencyScore: e.efficiencyScore,
+            sessionCount: e.sessionCount,
+            totalTokens: e.totalTokens,
+            totalCostUsd: e.totalCostUsd,
+            averageCacheHitRate: e.averageCacheHitRate,
+            outcomeSuccessRate: e.outcomeSuccessRate,
+            period,
+            windowDays,
+          });
+          return `<tr class="leaderboard-row" tabindex="0" role="button" aria-label="View details for ${escapeHtml(e.displayName ?? e.username)}" data-member-b64="${memberData}" ${rowStyle}>
           <td><strong>${e.rank}</strong></td>
-          <td>${escapeHtml(e.displayName ?? e.username)}${isCurrentUser ? ' <span class="status-badge status-connected">You</span>' : ''}</td>
+          <td>${escapeHtml(e.displayName ?? e.username)}${isCurrentUser ? ' <span class="status-badge status-connected">You</span>' : ""}</td>
           <td><strong>${e.efficiencyScore.toFixed(0)}</strong></td>
           <td>${e.sessionCount}</td>
           <td>${formatNumber(e.totalTokens)}</td>
@@ -604,12 +731,15 @@ function buildLeaderboardPage(db: LeaderboardDatabase, teamId: string, githubId:
           <td>${successRate}</td>
           <td>${cacheRate}</td>
         </tr>`;
-      }).join('\n');
+        })
+        .join("\n");
     } catch {
-      entriesHtml = '<tr><td colspan="8" class="empty">Invalid snapshot data</td></tr>';
+      entriesHtml =
+        '<tr><td colspan="8" class="empty">Invalid snapshot data</td></tr>';
     }
   } else {
-    entriesHtml = '<tr><td colspan="8" class="empty">No leaderboard data yet. Opt in and submit sessions to appear.</td></tr>';
+    entriesHtml =
+      '<tr><td colspan="8" class="empty">No leaderboard data yet. Opt in and submit sessions to appear.</td></tr>';
   }
 
   return `<!DOCTYPE html>
@@ -617,9 +747,9 @@ function buildLeaderboardPage(db: LeaderboardDatabase, teamId: string, githubId:
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Token Tracker — Leaderboard</title><style>${STYLES}</style></head>
 <body>
-  ${buildWebNav('leaderboard')}
+  ${buildWebNav("leaderboard")}
   <h1>Team Leaderboard</h1>
-  <p class="subtitle">${team ? escapeHtml(team.teamName) : 'Team'} · ${members.length} opted-in member${members.length !== 1 ? 's' : ''}${snapshot ? ` · Last updated: ${escapeHtml(snapshot.computedAt)}` : ''}</p>
+  <p class="subtitle">${team ? escapeHtml(team.teamName) : "Team"} · ${members.length} opted-in member${members.length !== 1 ? "s" : ""}${snapshot ? ` · Last updated: ${escapeHtml(snapshot.computedAt)}` : ""}</p>
 
   ${myRankCard}
 
@@ -736,108 +866,166 @@ export function createApp(
   localDb: TtmDatabase | null = null,
   config: AppConfig = {},
 ): (req: IncomingMessage, res: ServerResponse) => void {
-  const adminApiKey = config.adminApiKey ?? '';
-  const githubClientId = config.githubClientId ?? '';
-  const githubClientSecret = config.githubClientSecret ?? '';
-  const githubOAuthClient = config.githubOAuthClient ?? (
-    githubClientId && githubClientSecret
+  const adminApiKey = config.adminApiKey ?? "";
+  const githubClientId = config.githubClientId ?? "";
+  const githubClientSecret = config.githubClientSecret ?? "";
+  const githubOAuthClient =
+    config.githubOAuthClient ??
+    (githubClientId && githubClientSecret
       ? createDefaultGitHubOAuthClient(githubClientId, githubClientSecret)
-      : null
-  );
+      : null);
 
   return (req: IncomingMessage, res: ServerResponse) => {
     // Security headers
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+    );
 
-    const { path, query } = parseUrlPath(req.url ?? '/');
+    // Rate limiting — matches desktop app (60 req/min per IP)
+    const clientIp =
+      (req.headers["x-forwarded-for"] as string | undefined) ??
+      req.socket.remoteAddress ??
+      "unknown";
+    const now = Date.now();
+    const entry = rateLimitStore.get(clientIp);
+
+    if (entry) {
+      if (now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+        rateLimitStore.set(clientIp, { count: 1, windowStart: now });
+      } else {
+        entry.count++;
+        if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
+          res.writeHead(429, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: "Too many requests. Please try again later.",
+            }),
+          );
+          return;
+        }
+      }
+    } else {
+      rateLimitStore.set(clientIp, { count: 1, windowStart: now });
+    }
+
+    // Periodic cleanup of stale rate limit entries
+    if (rateLimitStore.size > 1000) {
+      for (const [key, value] of rateLimitStore.entries()) {
+        if (now - value.windowStart > RATE_LIMIT_WINDOW_MS) {
+          rateLimitStore.delete(key);
+        }
+      }
+    }
+
+    const { path, query } = parseUrlPath(req.url ?? "/");
     const cookies = parseCookies(req.headers.cookie);
     const sessionId = cookies[SESSION_COOKIE_NAME];
     const session = sessionId ? db.getWebSession(sessionId) : null;
-    const devGithubId = process.env.TTM_DEV_AUTH === 'true' && !session && !githubClientId && cookies.github_id ? Number(cookies.github_id) : null;
-    if (devGithubId) process.stderr.write('[WARNING] Dev-mode auth active (TTM_DEV_AUTH=true). Do not use in production.\n');
+    const devGithubId =
+      process.env.TTM_DEV_AUTH === "true" &&
+      !session &&
+      !githubClientId &&
+      cookies.github_id
+        ? Number(cookies.github_id)
+        : null;
+    if (devGithubId)
+      process.stderr.write(
+        "[WARNING] Dev-mode auth active (TTM_DEV_AUTH=true). Do not use in production.\n",
+      );
     const githubId = session?.githubId ?? devGithubId ?? null;
     const persistedUser = githubId ? db.getGitHubUser(githubId) : null;
-    const githubUser = persistedUser ?? (devGithubId
-      ? {
-          githubId: devGithubId,
-          username: `user_${devGithubId}`,
-          displayName: null,
-          avatarUrl: null,
-          email: null,
-        }
-      : null);
-    const membership = githubId ? db.getMembership(githubId, DEFAULT_TEAM_ID) : null;
+    const githubUser =
+      persistedUser ??
+      (devGithubId
+        ? {
+            githubId: devGithubId,
+            username: `user_${devGithubId}`,
+            displayName: null,
+            avatarUrl: null,
+            email: null,
+          }
+        : null);
+    const membership = githubId
+      ? db.getMembership(githubId, DEFAULT_TEAM_ID)
+      : null;
 
-    if (path === '/' || path === '/index.html') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    if (path === "/" || path === "/index.html") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(buildHomePage(db, githubUser, membership));
       return;
     }
 
-    if (path === '/settings') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    if (path === "/settings") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(buildSettingsPage(db, githubUser, membership));
       return;
     }
 
-    if (path === '/leaderboard') {
-      const period = query.period ?? 'month';
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    if (path === "/leaderboard") {
+      const period = query.period ?? "month";
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(buildLeaderboardPage(db, DEFAULT_TEAM_ID, githubId, period));
       return;
     }
 
-    if (path === '/auth/github') {
+    if (path === "/auth/github") {
       if (!githubClientId || !githubClientSecret || !githubOAuthClient) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`<!DOCTYPE html><html><head><style>${STYLES}</style></head><body>${buildWebNav('home')}<h1>GitHub OAuth Not Configured</h1><p class="subtitle">Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment variables to enable GitHub OAuth.</p><div class="card"><h2>Development Mode</h2><p>In development, you can simulate a GitHub connection by setting a cookie:</p><pre style="background:var(--bg-panel-strong);padding:12px;border-radius:4px;font-size:12px;border:1px solid var(--border)">curl -b "github_id=12345" http://localhost:${PORT}/</pre></div></body></html>`);
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(
+          `<!DOCTYPE html><html><head><style>${STYLES}</style></head><body>${buildWebNav("home")}<h1>GitHub OAuth Not Configured</h1><p class="subtitle">Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment variables to enable GitHub OAuth.</p><div class="card"><h2>Development Mode</h2><p>In development, you can simulate a GitHub connection by setting a cookie:</p><pre style="background:var(--bg-panel-strong);padding:12px;border-radius:4px;font-size:12px;border:1px solid var(--border)">curl -b "github_id=12345" http://localhost:${PORT}/</pre></div></body></html>`,
+        );
         return;
       }
 
       const origin = resolveOrigin(req, config.webOrigin ?? WEB_ORIGIN);
       const redirectUri = `${origin}/auth/github/callback`;
       const state = crypto.randomUUID().replace(/-/g, "");
-      const scope = 'read:user,user:email';
+      const scope = "read:user,user:email";
       const url = `https://github.com/login/oauth/authorize?client_id=${githubClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`;
-      res.writeHead(302, { Location: url, 'Set-Cookie': buildOAuthStateCookie(state, req) });
+      res.writeHead(302, {
+        Location: url,
+        "Set-Cookie": buildOAuthStateCookie(state, req),
+      });
       res.end();
       return;
     }
 
-    if (path === '/auth/github/callback') {
+    if (path === "/auth/github/callback") {
       const code = query.code;
       const state = query.state;
 
       if (!code || !state) {
-        res.writeHead(400, { 'Content-Type': 'text/plain' });
-        res.end('Missing code or state parameter');
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Missing code or state parameter");
         return;
       }
 
       // Validate state to prevent CSRF
       const cookieState = cookies.oauth_state;
       if (!cookieState || cookieState !== state) {
-        res.writeHead(403, { 'Content-Type': 'text/plain' });
-        res.end('Invalid state parameter');
+        res.writeHead(403, { "Content-Type": "text/plain" });
+        res.end("Invalid state parameter");
         return;
       }
 
       if (!githubClientId || !githubClientSecret || !githubOAuthClient) {
         res.writeHead(503, {
-          'Content-Type': 'text/plain',
-          'Set-Cookie': buildClearedOAuthStateCookie(req),
+          "Content-Type": "text/plain",
+          "Set-Cookie": buildClearedOAuthStateCookie(req),
         });
-        res.end('GitHub OAuth is not configured');
+        res.end("GitHub OAuth is not configured");
         return;
       }
 
       const origin = resolveOrigin(req, config.webOrigin ?? WEB_ORIGIN);
       const redirectUri = `${origin}/auth/github/callback`;
 
-      void githubOAuthClient.exchangeCodeForToken(code, redirectUri)
+      void githubOAuthClient
+        .exchangeCodeForToken(code, redirectUri)
         .then(async (accessToken) => {
           const user = await githubOAuthClient.fetchUser(accessToken);
           db.upsertGitHubUser({
@@ -850,12 +1038,14 @@ export function createApp(
           });
 
           const newSessionId = randomUUID();
-          const expiresAt = new Date(Date.now() + (SESSION_MAX_AGE_SECONDS * 1000)).toISOString();
+          const expiresAt = new Date(
+            Date.now() + SESSION_MAX_AGE_SECONDS * 1000,
+          ).toISOString();
           db.createWebSession(newSessionId, user.githubId, expiresAt);
 
           res.writeHead(302, {
-            Location: '/',
-            'Set-Cookie': [
+            Location: "/",
+            "Set-Cookie": [
               buildSessionCookie(newSessionId, req),
               buildClearedOAuthStateCookie(req),
             ],
@@ -863,27 +1053,29 @@ export function createApp(
           res.end();
         })
         .catch((error: unknown) => {
-          process.stderr.write(`[ERROR] OAuth callback failed: ${error instanceof Error ? error.message : String(error)}\n`);
+          process.stderr.write(
+            `[ERROR] OAuth callback failed: ${error instanceof Error ? error.message : String(error)}\n`,
+          );
           res.writeHead(502, {
-            'Content-Type': 'text/plain',
-            'Set-Cookie': buildClearedOAuthStateCookie(req),
+            "Content-Type": "text/plain",
+            "Set-Cookie": buildClearedOAuthStateCookie(req),
           });
-          res.end('Authentication failed. Please try again.');
+          res.end("Authentication failed. Please try again.");
         });
       return;
     }
 
-    if (path === '/auth/disconnect' && req.method === 'POST') {
-      req.on('end', () => {
+    if (path === "/auth/disconnect" && req.method === "POST") {
+      req.on("end", () => {
         if (sessionId) {
           db.deleteWebSession(sessionId);
         }
 
         res.writeHead(302, {
-          Location: '/',
-          'Set-Cookie': [
+          Location: "/",
+          "Set-Cookie": [
             buildClearedSessionCookie(req),
-            'github_id=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0',
+            "github_id=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
           ],
         });
         res.end();
@@ -891,14 +1083,17 @@ export function createApp(
       return;
     }
 
-    if ((path === '/settings/opt-in' || path === '/settings/opt-out') && req.method === 'POST') {
+    if (
+      (path === "/settings/opt-in" || path === "/settings/opt-out") &&
+      req.method === "POST"
+    ) {
       if (!githubId) {
-        res.writeHead(302, { Location: '/auth/github' });
+        res.writeHead(302, { Location: "/auth/github" });
         res.end();
         return;
       }
 
-      const optedIn = path === '/settings/opt-in';
+      const optedIn = path === "/settings/opt-in";
 
       // Ensure the user exists in github_users before syncing
       // In dev mode (cookie-based auth), create a placeholder entry
@@ -909,7 +1104,7 @@ export function createApp(
           displayName: null,
           avatarUrl: null,
           email: null,
-          accessToken: '',
+          accessToken: "",
         });
       }
 
@@ -919,75 +1114,88 @@ export function createApp(
       }
       db.setMembership(githubId, DEFAULT_TEAM_ID, optedIn);
 
-      res.writeHead(302, { Location: '/' });
+      res.writeHead(302, { Location: "/" });
       res.end();
       return;
     }
 
-    if (path === '/api/me') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        connected: githubUser !== null,
-        user: githubUser,
-        membership: membership,
-        team: db.getTeam(DEFAULT_TEAM_ID),
-      }));
+    if (path === "/api/me") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          connected: githubUser !== null,
+          user: githubUser,
+          membership: membership,
+          team: db.getTeam(DEFAULT_TEAM_ID),
+        }),
+      );
       return;
     }
 
-    if (path === '/api/leaderboard') {
-      const period = query.period ?? 'month';
+    if (path === "/api/leaderboard") {
+      const period = query.period ?? "month";
       const windowDays = periodToDays(period);
       computeAndSaveSnapshot(db, DEFAULT_TEAM_ID, windowDays);
       const snapshot = db.getSnapshot(DEFAULT_TEAM_ID, windowDays);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        team: db.getTeam(DEFAULT_TEAM_ID),
-        period,
-        windowDays,
-        snapshot: snapshot ? {
-          snapshotId: snapshot.snapshotId,
-          computedAt: snapshot.computedAt,
-          windowDays: snapshot.windowDays,
-          entries: JSON.parse(snapshot.entriesJson),
-        } : null,
-      }));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          team: db.getTeam(DEFAULT_TEAM_ID),
+          period,
+          windowDays,
+          snapshot: snapshot
+            ? {
+                snapshotId: snapshot.snapshotId,
+                computedAt: snapshot.computedAt,
+                windowDays: snapshot.windowDays,
+                entries: JSON.parse(snapshot.entriesJson),
+              }
+            : null,
+        }),
+      );
       return;
     }
 
-    if (path === '/api/compute-snapshot' && req.method === 'POST') {
+    if (path === "/api/compute-snapshot" && req.method === "POST") {
       // Basic admin protection: requires TTM_ADMIN_API_KEY header
       if (adminApiKey) {
-        const authHeader = req.headers.authorization ?? '';
-        const expected = Buffer.from(`Bearer ${adminApiKey}`, 'utf8');
-        const actual = Buffer.from(authHeader, 'utf8');
-        if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
-          res.writeHead(403, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'admin API key required' }));
+        const authHeader = req.headers.authorization ?? "";
+        const expected = Buffer.from(`Bearer ${adminApiKey}`, "utf8");
+        const actual = Buffer.from(authHeader, "utf8");
+        if (
+          expected.length !== actual.length ||
+          !timingSafeEqual(expected, actual)
+        ) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "admin API key required" }));
           return;
         }
       }
 
-      const period = query.period ?? 'month';
+      const period = query.period ?? "month";
       const windowDays = periodToDays(period);
       computeAndSaveSnapshot(db, DEFAULT_TEAM_ID, windowDays);
       const snapshot = db.getSnapshot(DEFAULT_TEAM_ID, windowDays);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        computed: true,
-        period,
-        windowDays,
-        snapshot: snapshot ? {
-          snapshotId: snapshot.snapshotId,
-          computedAt: snapshot.computedAt,
-          entryCount: JSON.parse(snapshot.entriesJson).length,
-        } : null,
-      }));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          computed: true,
+          period,
+          windowDays,
+          snapshot: snapshot
+            ? {
+                snapshotId: snapshot.snapshotId,
+                computedAt: snapshot.computedAt,
+                entryCount: JSON.parse(snapshot.entriesJson).length,
+              }
+            : null,
+        }),
+      );
       return;
     }
 
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('Not Found');
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.end("Not Found");
   };
 }
 
@@ -1006,20 +1214,26 @@ function main(): void {
   });
   const server = createServer(app);
 
-  server.listen(PORT, '127.0.0.1', () => {
-    process.stdout.write(`Token Tracker Team Web running at http://localhost:${PORT}\n`);
+  server.listen(PORT, "127.0.0.1", () => {
+    process.stdout.write(
+      `Token Tracker Team Web running at http://localhost:${PORT}\n`,
+    );
     process.stdout.write(`Home: http://localhost:${PORT}/\n`);
     process.stdout.write(`Settings: http://localhost:${PORT}/settings\n`);
     process.stdout.write(`Leaderboard: http://localhost:${PORT}/leaderboard\n`);
     process.stdout.write(`API: http://localhost:${PORT}/api/me\n`);
     process.stdout.write(`Database: ${db.path}\n`);
-    process.stdout.write(`GitHub OAuth: ${GITHUB_CLIENT_ID ? 'configured' : 'not configured (dev mode available)'}\n`);
-    process.stdout.write(`Admin API key: ${ADMIN_API_KEY ? 'set' : 'not set (compute-snapshot is unprotected)'}\n`);
+    process.stdout.write(
+      `GitHub OAuth: ${GITHUB_CLIENT_ID ? "configured" : "not configured (dev mode available)"}\n`,
+    );
+    process.stdout.write(
+      `Admin API key: ${ADMIN_API_KEY ? "set" : "not set (compute-snapshot is unprotected)"}\n`,
+    );
   });
 }
 
 // Only run the server when this file is executed directly, not when imported by tests
-const isMain = process.argv[1]?.endsWith('index.js') ?? false;
+const isMain = process.argv[1]?.endsWith("index.js") ?? false;
 if (isMain) {
   main();
 }

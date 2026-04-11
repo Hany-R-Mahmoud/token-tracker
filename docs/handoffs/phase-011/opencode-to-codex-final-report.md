@@ -1,20 +1,35 @@
 # Phase 011 — Final Completion Report
 
+## Archive Reconciliation Note
+
+**This report originally stated "Phase 011 is fully complete."**
+
+The initial delivery pass created a Claude adapter with three defects that
+required a follow-up correction pass (see `codex-to-opencode-correction-01.md`):
+
+1. `providerSessionId` derived from wrong field (`session_id` instead of `sessionId`)
+2. Synthetic responses not filtered correctly (checked `is_synthetic` instead of `message.model`)
+3. `toolCallCount` overcounted (treated any content array as a tool call)
+
+These defects were corrected in a separate pass. This report is preserved as
+a historical record of the initial delivery. The corrected implementation
+status should be verified against the current Claude adapter code.
+
 ## Summary
 
 Phase 011 adds Claude as a validated local provider by implementing a ClaudeAdapter that imports session JSONL files from `~/.claude/projects/`, excluding noise files, and surfacing Claude honestly across CLI, provider status, and docs.
 
 ## What was completed in this pass
 
-| Task | Status |
-|------|--------|
-| T001-T002 | ✅ Orchestrator and research done |
-| T003 | ✅ ClaudeAdapter implemented in packages/core/src/adapters/claude.ts |
-| T004 | ✅ Wired into core exports |
-| T005 | ✅ Updated CLI import/doctor to include Claude |
-| T006 | ✅ Provider status updated from unavailable to validated |
-| T007-T008 | ✅ Tests added, quickstart updated |
-| T009-T010 | ✅ Build, typecheck, validation passed |
+| Task      | Status                                                               |
+| --------- | -------------------------------------------------------------------- |
+| T001-T002 | ✅ Orchestrator and research done                                    |
+| T003      | ✅ ClaudeAdapter implemented in packages/core/src/adapters/claude.ts |
+| T004      | ✅ Wired into core exports                                           |
+| T005      | ✅ Updated CLI import/doctor to include Claude                       |
+| T006      | ✅ Provider status updated from unavailable to validated             |
+| T007-T008 | ✅ Tests added, quickstart updated                                   |
+| T009-T010 | ✅ Build, typecheck, validation passed                               |
 
 ## Files created
 
@@ -47,16 +62,16 @@ node packages/cli/dist/index.js import → 41 sessions imported (codex+opencode+
 
 ## Acceptance / quickstart status
 
-| Requirement | Status |
-|---|---|
-| Claude adapter exists and wired | PASS |
-| Claude sources discovered | PASS |
-| Noise files excluded | PASS |
-| Missing stats-cache doesn't block | PASS |
-| Claude appears in summaries | PASS |
-| Pricing stays honest | PASS |
-| Reset truth stays honest | PASS |
-| Docs match | PASS |
+| Requirement                       | Status |
+| --------------------------------- | ------ |
+| Claude adapter exists and wired   | PASS   |
+| Claude sources discovered         | PASS   |
+| Noise files excluded              | PASS   |
+| Missing stats-cache doesn't block | PASS   |
+| Claude appears in summaries       | PASS   |
+| Pricing stays honest              | PASS   |
+| Reset truth stays honest          | PASS   |
+| Docs match                        | PASS   |
 
 ## Completion statement
 
