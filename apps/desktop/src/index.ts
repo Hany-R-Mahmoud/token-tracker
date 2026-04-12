@@ -202,7 +202,7 @@ function buildRuntimeStatusCard(runtimeStatus: DesktopRuntimeStatus): string {
   };
 
   return `<div class="section" style="margin-top:20px">
-    <h2>Runtime Diagnostics</h2>
+    <h2 class="tooltip" data-tooltip="System health and performance metrics">Runtime Diagnostics</h2>
     <div class="details-grid">
       <div class="detail-label">Runtime</div><div class="detail-value">${escapeHtml(runtimeStatus.runtimeMode)}</div>
       <div class="detail-label">Port</div><div class="detail-value">${runtimeStatus.port}</div>
@@ -675,7 +675,7 @@ function buildOverviewHero(
     <div class="operational-copy">
       <div class="status-dot"></div>
       <div class="eyebrow">System Core</div>
-      <h2>Operational</h2>
+      <h2 class="tooltip" data-tooltip="Current operational status and activity">Operational</h2>
       <p>Active-surface consensus is ${escapeHtml(truthTone.toLowerCase())}. ${riskCount > 0 ? `${riskCount} risk vectors are elevated.` : 'No critical anomalies are forcing operator intervention.'}</p>
       <div class="operational-meta">
         <span>Latency ${latencyMs}ms</span>
@@ -782,7 +782,7 @@ function buildOverviewProviderIntegrity(snapshot: ReadSummarySnapshot, activeSur
   return `<section class="kinetic-panel integrity-panel">
     <div class="kinetic-panel-head">
       <div>
-        <h2>Provider Integrity</h2>
+        <h2 class="tooltip" data-tooltip="Provider output vs cost efficiency">Provider Integrity</h2>
         <p>Verification and cost pressure</p>
       </div>
     </div>
@@ -808,7 +808,7 @@ function buildOverviewCadenceSection(sessions: StoredSessionListItem[]): string 
   return `<section class="kinetic-panel cadence-panel">
     <div class="kinetic-panel-head">
       <div>
-        <h2>Cluster Topology</h2>
+        <h2 class="tooltip" data-tooltip="Visual map of recent session activity">Cluster Topology</h2>
         <p>Activity density and truth rhythm</p>
       </div>
     </div>
@@ -829,7 +829,7 @@ function buildOverviewLiveFeed(sessions: StoredSessionListItem[]): string {
   return `<section class="kinetic-panel signal-feed-panel">
     <div class="kinetic-panel-head">
       <div>
-        <h2>Investigation Log</h2>
+        <h2 class="tooltip" data-tooltip="Recent error and investigation events">Investigation Log</h2>
         <p>Terminal-grade session feed with ranked anomalies</p>
       </div>
     </div>
@@ -877,19 +877,19 @@ function buildAnalyticsHero(analytics: ReadAnalyticsSnapshot, totalTokens: numbe
 
   return `<section class="analytics-hero-grid">
     <div class="analytics-hero-main">
-      <label>AI Usage Score</label>
+      <label class="tooltip" data-tooltip="Composite score: value density adjusted for usage patterns">AI Usage Score</label>
       <div class="analytics-hero-value">${liveIndex.toFixed(1)}<span>/100</span></div>
       <div class="analytics-hero-delta">Value density index</div>
       ${buildMiniBars(analytics.dailyBuckets.slice(-8).map((bucket) => bucket.sessions || 1), 'var(--accent)')}
     </div>
     <div class="analytics-hero-side">
       <div class="analytics-side-card analytics-side-card-primary">
-        <label>Total Spend</label>
+        <label class="tooltip" data-tooltip="Total cost across all providers for selected period">Total Spend</label>
         <strong>$${totalCost.toFixed(2)}</strong>
         <div class="line-meter" role="progressbar" aria-valuenow="${clampNumber(loadValue, 18, 96)}" aria-valuemin="0" aria-valuemax="100" aria-label="Spend relative to baseline"><span style="width:${clampNumber(loadValue, 18, 96)}%"></span></div>
       </div>
       <div class="analytics-side-card analytics-side-card-critical">
-        <label>Avg Cost/Session</label>
+        <label class="tooltip" data-tooltip="Average cost per session in selected period">Avg Cost/Session</label>
         <strong>$${(totalCost / Math.max(analytics.sessionCount, 1)).toFixed(2)}</strong>
         <div class="line-meter line-meter-critical" role="progressbar" aria-valuenow="${Math.round(errorLatency * 4)}" aria-valuemin="0" aria-valuemax="100" aria-label="Average session cost"><span style="width:${clampNumber(errorLatency * 4, 10, 90)}%"></span></div>
       </div>
@@ -904,18 +904,18 @@ function buildAnalyticsTrendPanels(analytics: ReadAnalyticsSnapshot): string {
     <article class="kinetic-panel">
       <div class="kinetic-panel-head">
         <div>
-          <h2>Trend Activity</h2>
+          <h2 class="tooltip" data-tooltip="Token usage trends over selected period">Trend Activity</h2>
           <p>Token flux and spend propagation</p>
         </div>
       </div>
       ${buildTrendMesh(tokenValues.length > 0 ? tokenValues : [1, 2, 4, 3, 5], 'var(--accent)')}
       <div class="trend-subcharts">
         <div>
-          <span>Primary Flux</span>
+          <span class="tooltip" data-tooltip="Daily token consumption">Primary Flux</span>
           ${buildMiniBars(tokenValues.slice(-8), 'var(--accent)')}
         </div>
         <div>
-          <span>Volume Offset</span>
+          <span class="tooltip" data-tooltip="Daily cost in cents">Volume Offset</span>
           ${buildMiniBars(costValues.slice(-8), 'var(--secondary-signal)')}
         </div>
       </div>
@@ -938,14 +938,14 @@ function buildAnalyticsValueMatrix(analytics: ReadAnalyticsSnapshot): string {
     const yPct = clampNumber(100 - (summary.averageSuccessScore ?? 0), 6, 94);
     const size = clampNumber((summary.sessions / Math.max(analytics.sessionCount, 1)) * 140 + 18, 18, 72);
     const accent = getProviderAccent(summary.provider);
-    return `<div class="matrix-point" style="left:${xPct}%;top:${yPct}%;width:${size}px;height:${size}px;background:${accent}" title="${escapeHtml(summary.provider)} · success ${(summary.averageSuccessScore ?? 0).toFixed(0)} · ${formatUsdCompact(summary.totalCostUsd)}"></div>`;
+    return `<div class="matrix-point tooltip" data-tooltip="${escapeHtml(summary.provider)} · success ${(summary.averageSuccessScore ?? 0).toFixed(0)}% · ${formatUsdCompact(summary.totalCostUsd)}" style="left:${xPct}%;top:${yPct}%;width:${size}px;height:${size}px;background:${accent}"></div>`;
   }).join('');
 
   return `<section class="analytics-grid analytics-grid-split">
     <article class="kinetic-panel">
       <div class="kinetic-panel-head">
         <div>
-          <h2>Value Density Mapping</h2>
+          <h2 class="tooltip" data-tooltip="Visualization of provider value vs cost efficiency">Value Density Mapping</h2>
           <p>High value should drift to the upper-right low-cost lane</p>
         </div>
       </div>
@@ -961,7 +961,7 @@ function buildAnalyticsValueMatrix(analytics: ReadAnalyticsSnapshot): string {
     <article class="kinetic-panel">
       <div class="kinetic-panel-head">
         <div>
-          <h2>Provider Efficiency Matrix</h2>
+          <h2 class="tooltip" data-tooltip="Provider performance comparison across metrics">Provider Efficiency Matrix</h2>
           <p>Output vs cost by provider lane</p>
         </div>
       </div>
@@ -1007,7 +1007,7 @@ function buildAnalyticsComposition(analytics: ReadAnalyticsSnapshot): string {
     <article class="kinetic-panel cadence-panel">
       <div class="kinetic-panel-head">
         <div>
-          <h2>Activity Cadence</h2>
+          <h2 class="tooltip" data-tooltip="Daily session frequency over time">Activity Cadence</h2>
           <p>Weekly pressure rhythm</p>
         </div>
       </div>
@@ -1026,7 +1026,7 @@ function buildAnalyticsComposition(analytics: ReadAnalyticsSnapshot): string {
     <article class="kinetic-panel volatility-panel">
       <div class="kinetic-panel-head">
         <div>
-          <h2>Asset Volatility</h2>
+          <h2 class="tooltip" data-tooltip="Cost and token variation trends">Asset Volatility</h2>
           <p>Model movement, efficiency, and spend</p>
         </div>
       </div>
@@ -1037,7 +1037,7 @@ function buildAnalyticsComposition(analytics: ReadAnalyticsSnapshot): string {
     <article class="kinetic-panel">
       <div class="kinetic-panel-head">
         <div>
-          <h2>Outcome Composition</h2>
+          <h2 class="tooltip" data-tooltip="Session success vs failure breakdown">Outcome Composition</h2>
           <p>Distribution across sampled sessions</p>
         </div>
       </div>
@@ -1051,14 +1051,14 @@ function buildAnalyticsComposition(analytics: ReadAnalyticsSnapshot): string {
     <article class="kinetic-panel">
       <div class="kinetic-panel-head">
         <div>
-          <h2>Model Pressure</h2>
+          <h2 class="tooltip" data-tooltip="Token consumption by model">Model Pressure</h2>
           <p>Top models by token concentration</p>
         </div>
       </div>
       <div class="provider-stack">
         ${analytics.modelSummaries.slice(0, 5).map((model) => {
           const width = clampNumber((model.totalTokens / Math.max(...analytics.modelSummaries.map((entry) => entry.totalTokens), 1)) * 100, 8, 100);
-          return `<div class="provider-meter">
+          return `<div class="provider-meter tooltip" data-tooltip="${escapeHtml(model.model)} · ${model.sessions} sessions · ${formatNumber(model.totalTokens)} tokens">
             <div class="provider-meter-head">
               <div>
                 <strong>${escapeHtml(model.model)}</strong>
@@ -1163,7 +1163,7 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
   ${buildFilterStateHtml(activeProvider, activeModel, activeQ, listResult)}
 
   <div class="section">
-    <h2>Filter Sessions</h2>
+    <h2 class="tooltip" data-tooltip="Filter sessions by provider, model, or search term">Filter Sessions</h2>
     <form method="get" action="/" class="filter-form">
       <label class="filter-label" for="filter-provider">Provider
         <select name="provider" id="filter-provider">
@@ -1186,7 +1186,7 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
   </div>
 
   <div class="section">
-    <h2>Provider Summaries</h2>
+    <h2 class="tooltip" data-tooltip="Aggregated metrics per AI provider">Provider Summaries</h2>
     <div class="table-wrapper">
     <table>
       <colgroup>
@@ -1204,7 +1204,7 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
   </div>
 
   <div class="section">
-    <h2>Recent Sessions</h2>
+    <h2 class="tooltip" data-tooltip="Most recent AI sessions with outcomes">Recent Sessions</h2>
     <div class="table-wrapper">
     <table>
       <colgroup>
@@ -1679,14 +1679,14 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activePeriod: stri
 
   <div class="analytics-grid analytics-grid-split">
     <div class="section">
-      <h2>Distribution</h2>
+      <h2 class="tooltip" data-tooltip="Token distribution across providers">Distribution</h2>
       <h3 style="font-size:13px;color:var(--text-secondary);margin:0 0 8px;font-weight:500">By Provider (Cost)</h3>
       ${providerDistBars}
       <h3 style="font-size:13px;color:var(--text-secondary);margin:16px 0 8px;font-weight:500">By Model (Tokens)</h3>
       ${modelDistBars}
     </div>
     <div class="section">
-      <h2>Activity Heatmap</h2>
+      <h2 class="tooltip" data-tooltip="Daily activity intensity visualization">Activity Heatmap</h2>
       <div class="heatmap-grid">${cells}</div>
       <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-secondary);margin-top:8px"><span>Less</span><div style="display:flex;gap:4px"><div class="heatmap-cell" style="opacity:0.15"></div><div class="heatmap-cell" style="opacity:0.4"></div><div class="heatmap-cell" style="opacity:0.7"></div><div class="heatmap-cell" style="opacity:1"></div></div><span>More</span></div>
     </div>
@@ -1694,11 +1694,11 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activePeriod: stri
 
   <div class="analytics-grid analytics-grid-split">
     <div class="section">
-      <h2>Success Analysis</h2>
+      <h2 class="tooltip" data-tooltip="Success rate by provider">Success Analysis</h2>
       ${buildAnalyticsSuccessSection(analytics)}
     </div>
     <div class="section">
-      <h2>Context Pressure</h2>
+      <h2 class="tooltip" data-tooltip="Context window usage patterns">Context Pressure</h2>
       ${buildAnalyticsContextSection(analytics)}
     </div>
   </div>
@@ -1706,7 +1706,7 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activePeriod: stri
   <div class="analytics-grid analytics-grid-split">
     ${activeSurfacePanel ? buildActiveSurfaceTruthSection(activeSurfacePanel) : ''}
     <div class="section">
-      <h2>Model Breakdown</h2>
+      <h2 class="tooltip" data-tooltip="Detailed model usage statistics">Model Breakdown</h2>
       <div class="table-wrapper">
       <table>
         <thead><tr><th scope="col">Model</th><th scope="col">Provider</th><th scope="col">Sessions</th><th scope="col">Tokens</th><th scope="col">Cost (USD)</th><th scope="col">Avg Efficiency</th></tr></thead>
@@ -1717,7 +1717,7 @@ function buildAnalyticsHtml(analytics: ReadAnalyticsSnapshot, activePeriod: stri
   </div>
 
   <div class="section">
-    <h2>Daily Activity (Last ${dailyBuckets.length} Days)</h2>
+    <h2 class="tooltip" data-tooltip="Day-by-day session and cost activity">Daily Activity (Last ${dailyBuckets.length} Days)</h2>
     <div class="table-wrapper">
     <table>
       <thead><tr><th scope="col">Date</th><th scope="col">Sessions</th><th scope="col">Tokens</th><th scope="col">Cost (USD)</th><th scope="col">Avg Efficiency</th></tr></thead>

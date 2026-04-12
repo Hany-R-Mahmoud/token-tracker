@@ -1574,6 +1574,47 @@ export const PAGE_STYLES = `
   .legend-step-2 { background: rgba(163, 255, 217, 0.32); }
   .legend-step-3 { background: rgba(163, 255, 217, 0.58); }
   .legend-step-4 { background: rgba(163, 255, 217, 0.92); }
+  .tooltip {
+    position: relative;
+    display: inline-block;
+    cursor: help;
+  }
+  .tooltip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 12px;
+    background: var(--bg-panel-strong);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity var(--transition-fast), visibility var(--transition-fast);
+    z-index: 100;
+    box-shadow: var(--shadow-elevated);
+    pointer-events: none;
+  }
+  .tooltip:hover::after {
+    opacity: 1;
+    visibility: visible;
+  }
+  .tooltip-wide::after {
+    white-space: normal;
+    max-width: 220px;
+    text-align: left;
+  }
+  .tooltip-top::after {
+    bottom: auto;
+    top: calc(100% + 8px);
+  }
+  .analytics-hero-main .tooltip::after {
+    background: var(--bg-secondary);
+  }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
       animation-duration: 0.01ms !important;

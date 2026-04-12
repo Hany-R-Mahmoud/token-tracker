@@ -722,8 +722,8 @@ export class TtmDatabase implements AdapterStorage {
       WHERE started_at >= datetime('now', ?)
       GROUP BY strftime('%Y-%m-%d %H', started_at)
       ORDER BY date DESC
-      LIMIT 24
-    `).all(`-${hours} hours`) as unknown as DailyBucket[];
+      LIMIT ?
+    `).all(`-${hours} hours`, hours) as unknown as DailyBucket[];
 
     return rows;
   }
