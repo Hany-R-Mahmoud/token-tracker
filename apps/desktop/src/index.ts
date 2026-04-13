@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { watchFile, existsSync } from 'node:fs';
 import type { Stats } from 'node:fs';
@@ -46,11 +45,34 @@ import {
   resetCheckpointForBand,
 } from '@ttm/core';
 
-const PORT = Number(process.env.TTM_DESKTOP_PORT ?? '3100');
+import { applySecurityHeaders } from './security-headers.js';
+import { sendError } from './error-handler.js';
+import { getRuntimeStatus, setDesktopDatabaseResolution, getDesktopDatabaseResolution, type DesktopRuntimeStatus } from './runtime-status.js';
+import { loadEnvironmentConfig, RUNTIME_STARTED_AT } from './env-config.js';
+import {
+  handleSummaryRequest,
+  handleAnalyticsRequest,
+  handleRuntimeStatusRequest,
+  handleRefreshRequest,
+  handleAnalyticsExportRequest,
+} from './handlers/index.js';
+import {
+  type DesktopSurface,
+  type EmptyStateKind,
+  buildThemeScript,
+  buildDesktopNav,
+  buildRuntimeStatusCard,
+  buildErrorHtml,
+  buildEmptyHtml,
+  buildRuntimeDiagnosticsHtml,
+} from './rendering/layout.js';
 
-const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const envConfig = loadEnvironmentConfig();
+const PORT = envConfig.port;
+const DESKTOP_API_KEY = envConfig.apiKey;
+
+const RATE_LIMIT_WINDOW_MS = envConfig.rateLimitWindowMs;
 const RATE_LIMIT_MAX_REQUESTS = 60;
-const DESKTOP_API_KEY = process.env.TTM_DESKTOP_API_KEY ?? '';
 
 interface RateLimitEntry {
   count: number;
@@ -59,217 +81,6 @@ interface RateLimitEntry {
 
 const rateLimitStore = new Map<string, RateLimitEntry>();
 const notificationCheckpoints = new Map<string, NotificationCheckpoint>();
-
-// Security headers applied to all HTTP responses
-const SECURITY_HEADERS = {
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
-};
-
-function applySecurityHeaders(res: ServerResponse): void {
-  for (const [header, value] of Object.entries(SECURITY_HEADERS)) {
-    res.setHeader(header, value);
-  }
-}
-
-// Generic error handler — never leak internal details to clients
-function sendError(res: ServerResponse, statusCode: number, publicMessage: string, logMessage?: string): void {
-  if (logMessage) {
-    process.stderr.write(`[ERROR] ${logMessage}\n`);
-  }
-  res.writeHead(statusCode, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end(publicMessage);
-}
-
-type DesktopSurface = 'overview' | 'analytics';
-type EmptyStateKind = 'no-imported-data' | 'no-window-data';
-
-interface DesktopRuntimeStatus {
-  runtimeMode: string;
-  instanceToken: string;
-  ownerPath: string;
-  port: number;
-  databasePath: string;
-  databaseSource: DatabasePathResolution['source'];
-  canonicalDatabasePath: string;
-  legacyDatabasePath: string | null;
-  migrationPerformed: boolean;
-  totalSessionCount: number;
-  analyticsWindowDays: number;
-  analyticsWindowSessionCount: number;
-  refreshCadenceSeconds: number;
-  dbExists: boolean;
-  startedAt: string;
-}
-
-const DESKTOP_STARTED_AT = new Date().toISOString();
-const DESKTOP_RUNTIME_MODE = process.env.TTM_DESKTOP_RUNTIME ?? 'dev';
-const DESKTOP_RUNTIME_INSTANCE_TOKEN = process.env.TTM_RUNTIME_INSTANCE_TOKEN ?? 'dev-runtime';
-const DESKTOP_RUNTIME_OWNER_PATH = process.env.TTM_RUNTIME_OWNER_PATH ?? '';
-let desktopDatabaseResolution: DatabasePathResolution | null = null;
-
-function buildErrorHtml(surface: DesktopSurface, message: string, runtimeStatus?: DesktopRuntimeStatus): string {
-  const title = surface === 'analytics' ? 'Analytics' : 'Overview';
-  return `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Token Tracker — Error</title><style>${PAGE_STYLES}</style></head>
-  <body>
-  <a class="skip-link" href="#main-content">Skip to main content</a>
-  ${buildDesktopNav(surface)}
-  <main id="main-content"><h1>${title}</h1><p class="error">An unexpected error occurred. Please try again.</p>${runtimeStatus ? buildRuntimeStatusCard(runtimeStatus) : ''}</main>
-  ${buildThemeScript()}
-</body></html>`;
-}
-
-function buildEmptyHtml(surface: DesktopSurface, runtimeStatus: DesktopRuntimeStatus, kind: EmptyStateKind): string {
-  const title = surface === 'analytics' ? 'Analytics' : 'Overview';
-  const body = kind === 'no-window-data'
-    ? 'No sessions matched the current view, but Token Tracker can still see historical data in the active database.'
-    : 'No data has been imported into the active local database yet.';
-  const hint = kind === 'no-window-data'
-    ? '<p class="empty" style="margin-top:12px">Try a wider time window or inspect the runtime diagnostics below before assuming imports are missing.</p>'
-    : '<p class="empty" style="margin-top:12px">Run <code>ttm import</code> only if the diagnostics below show the active database truly has 0 sessions.</p>';
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Token Tracker</title><style>${PAGE_STYLES}</style></head>
-<body>
-  <a class="skip-link" href="#main-content">Skip to main content</a>
-  ${buildDesktopNav(surface)}
-  <main id="main-content">
-    <h1>${title}</h1>
-    <p class="empty">${body}</p>
-    ${hint}
-    ${buildRuntimeStatusCard(runtimeStatus)}
-  </main>
-  ${buildThemeScript()}
-</body></html>`;
-}
-
-function buildThemeScript(): string {
-  return `<script>
-    (function() {
-      try {
-        var savedTheme = localStorage.getItem('ttm-theme');
-        document.documentElement.setAttribute('data-theme', savedTheme || 'dark');
-        var toggle = document.getElementById('theme-toggle');
-        if (toggle) {
-          toggle.addEventListener('click', function() {
-            var current = document.documentElement.getAttribute('data-theme');
-            var next = current === 'dark' ? 'light' : 'dark';
-            document.documentElement.setAttribute('data-theme', next);
-            localStorage.setItem('ttm-theme', next);
-          });
-        }
-      } catch (_) {}
-    })();
-  </script>`;
-}
-
-function buildDesktopNav(active: DesktopSurface, options: { showRefreshIndicator?: boolean } = {}): string {
-  const refreshIndicator = options.showRefreshIndicator
-    ? '<span class="refresh-indicator" id="refresh-state" title="Auto-refresh: watching database" role="status" aria-live="polite"></span>'
-    : '<span class="refresh-indicator refresh-indicator-placeholder" aria-hidden="true">watching database</span>';
-
-  return `<nav class="nav">
-    <span class="nav-brand">${buildBrandLockup('Token Tracker', true)}</span>
-    <div class="nav-links">
-      <a href="/"${active === 'overview' ? ' class="active"' : ''}>Overview</a>
-      <a href="/analytics"${active === 'analytics' ? ' class="active"' : ''}>Analytics</a>
-    </div>
-    <div class="nav-actions">
-      ${refreshIndicator}
-      <span class="nav-notification-status" title="Notification status: ambient mode - notifications shown in-app">
-        <span class="nav-notification-icon">🔔</span>
-        <span class="nav-notification-label">Ambient</span>
-      </span>
-      <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">🌓</button>
-    </div>
-  </nav>`;
-}
-
-function buildRuntimeStatusCard(runtimeStatus: DesktopRuntimeStatus): string {
-  const sourceLabels: Record<DesktopRuntimeStatus['databaseSource'], string> = {
-    canonical_home: 'canonical home database',
-    env: 'env override',
-    explicit: 'explicit path',
-    legacy_cwd_fallback: 'legacy fallback path',
-    legacy_cwd_migrated: 'legacy path migrated to home',
-  };
-
-  return `<div class="section" style="margin-top:20px">
-    <h2 class="tooltip" data-tooltip="System health and performance metrics">Runtime Diagnostics</h2>
-    <div class="details-grid">
-      <div class="detail-label">Runtime</div><div class="detail-value">${escapeHtml(runtimeStatus.runtimeMode)}</div>
-      <div class="detail-label">Port</div><div class="detail-value">${runtimeStatus.port}</div>
-      <div class="detail-label">Owner</div><div class="detail-value"><code>${escapeHtml(runtimeStatus.ownerPath || 'unknown')}</code></div>
-      <div class="detail-label">Database</div><div class="detail-value"><code>${escapeHtml(runtimeStatus.databasePath)}</code></div>
-      <div class="detail-label">Source</div><div class="detail-value">${escapeHtml(sourceLabels[runtimeStatus.databaseSource] ?? runtimeStatus.databaseSource)}</div>
-      <div class="detail-label">Canonical path</div><div class="detail-value"><code>${escapeHtml(runtimeStatus.canonicalDatabasePath)}</code></div>
-      <div class="detail-label">Legacy path</div><div class="detail-value">${runtimeStatus.legacyDatabasePath ? `<code>${escapeHtml(runtimeStatus.legacyDatabasePath)}</code>` : 'none detected'}</div>
-      <div class="detail-label">Migration</div><div class="detail-value">${runtimeStatus.migrationPerformed ? 'performed on startup' : 'not needed'}</div>
-      <div class="detail-label">Total sessions</div><div class="detail-value">${runtimeStatus.totalSessionCount}</div>
-      <div class="detail-label">${runtimeStatus.analyticsWindowDays}d sessions</div><div class="detail-value">${runtimeStatus.analyticsWindowSessionCount}</div>
-      <div class="detail-label">DB exists</div><div class="detail-value">${runtimeStatus.dbExists ? 'yes' : 'no'}</div>
-      <div class="detail-label">Refresh cadence</div><div class="detail-value">${runtimeStatus.refreshCadenceSeconds}s</div>
-      <div class="detail-label">Started</div><div class="detail-value">${escapeHtml(runtimeStatus.startedAt)}</div>
-    </div>
-    <div class="footer-note" style="margin-top:12px">
-      <a href="/api/runtime-status">View runtime JSON</a>
-    </div>
-  </div>`;
-}
-
-function getRuntimeStatus(readService: TtmReadService, prefs: MonitoringPreferences, analyticsWindowDays = prefs.defaultAnalyticsWindowDays): DesktopRuntimeStatus {
-  const summary = readService.getSummarySnapshot();
-  const analytics = readService.getAnalyticsSnapshot(analyticsWindowDays);
-  const resolution = desktopDatabaseResolution ?? {
-    path: summary.databasePath,
-    source: 'explicit',
-    canonicalPath: summary.databasePath,
-    legacyPath: null,
-    migrationPerformed: false,
-  };
-
-  return {
-    runtimeMode: DESKTOP_RUNTIME_MODE,
-    instanceToken: DESKTOP_RUNTIME_INSTANCE_TOKEN,
-    ownerPath: DESKTOP_RUNTIME_OWNER_PATH,
-    port: PORT,
-    databasePath: summary.databasePath,
-    databaseSource: resolution.source,
-    canonicalDatabasePath: resolution.canonicalPath,
-    legacyDatabasePath: resolution.legacyPath,
-    migrationPerformed: resolution.migrationPerformed,
-    totalSessionCount: summary.sessionCount,
-    analyticsWindowDays,
-    analyticsWindowSessionCount: analytics.sessionCount,
-    refreshCadenceSeconds: prefs.refreshCadenceSeconds,
-    dbExists: existsSync(summary.databasePath),
-    startedAt: DESKTOP_STARTED_AT,
-  };
-}
-
-function buildRuntimeDiagnosticsHtml(runtimeStatus: DesktopRuntimeStatus): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Token Tracker — Runtime Diagnostics</title><style>${PAGE_STYLES}</style></head>
-<body>
-  <a class="skip-link" href="#main-content">Skip to main content</a>
-  ${buildDesktopNav('overview')}
-  <main id="main-content">
-    <h1>Runtime Diagnostics</h1>
-    <p class="subtitle">Packaged and local desktop modes must agree on the same active database.</p>
-    ${buildRuntimeStatusCard(runtimeStatus)}
-  </main>
-  ${buildThemeScript()}
-</body></html>`;
-}
 
 interface DesktopActiveSurfacePanelData {
   resolution: ActiveSurfaceResolution | null;
@@ -2191,7 +2002,7 @@ function handleRequest(
 
     if (!analytics || analytics.sessionCount === 0) {
       response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      response.end(buildEmptyHtml('analytics', runtimeStatus ?? getRuntimeStatus(readService, prefs, 30), (runtimeStatus?.totalSessionCount ?? 0) > 0 ? 'no-window-data' : 'no-imported-data'));
+      response.end(buildEmptyHtml('analytics', runtimeStatus ?? getRuntimeStatus(readService, prefs, 30), (runtimeStatus?.totalSessionCount ?? 0) > 0 ? 'no-window-data' : 'no-imported-data', activePeriod));
       return;
     }
 
@@ -2259,6 +2070,7 @@ function handleRequest(
         'overview',
         runtimeStatus,
         runtimeStatus.totalSessionCount > 0 ? 'no-window-data' : 'no-imported-data',
+        activePeriod,
       ));
       return;
     }
@@ -2418,7 +2230,7 @@ function main(): void {
   try {
     database = new TtmDatabase();
     readService = new TtmReadService(database);
-    desktopDatabaseResolution = database.resolution;
+    setDesktopDatabaseResolution(database.resolution);
   } catch (error) {
     process.stderr.write(`failed to initialize database: ${String(error)}\n`);
     process.exit(1);

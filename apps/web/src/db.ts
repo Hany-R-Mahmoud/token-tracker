@@ -51,6 +51,7 @@ const LEADERBOARD_SCHEMA_STATEMENTS = [
     execution_quality_score REAL,
     rework_score REAL,
     value_density_score REAL,
+    analysis_confidence REAL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (user_github_id) REFERENCES github_users(github_id),
     FOREIGN KEY (team_id) REFERENCES teams(team_id)

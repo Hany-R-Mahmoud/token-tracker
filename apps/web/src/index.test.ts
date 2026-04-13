@@ -68,6 +68,9 @@ async function runAppRequest(
     let body = '';
 
     const res = {
+      setHeader(name: string, value: string | string[]): void {
+        responseHeaders[name] = value;
+      },
       writeHead(code: number, headers?: Record<string, string | string[]>): ServerResponse {
         statusCode = code;
         if (headers) {
