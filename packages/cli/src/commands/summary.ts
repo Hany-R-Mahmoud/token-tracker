@@ -1,12 +1,12 @@
-import type { CommandHandler, CommandContext, CommandResult, CommandError } from './types.js';
-import { success, error } from './utils.js';
+import type { CommandHandler, CommandContext, CommandResult, CommandError } from '../shared/types.js';
+import { success, error } from '../shared/utils.js';
 
 const DESCRIPTION = 'Print a summary of all tracked sessions';
 
 export const summaryCommand: CommandHandler = async (context: CommandContext): Promise<CommandResult | CommandError> => {
   try {
     const core = await import('@ttm/core');
-    const { formatKeyValueLine, formatSummaryRow } = await import('../output.js');
+    const { formatKeyValueLine, formatSummaryRow } = await import('../shared/output.js');
 
     const database = new core.TtmDatabase();
     const readService = new core.TtmReadService(database);

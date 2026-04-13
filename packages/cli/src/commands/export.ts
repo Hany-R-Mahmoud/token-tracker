@@ -1,5 +1,5 @@
-import type { CommandHandler, CommandContext, CommandResult, CommandError } from './types.js';
-import { success, error } from './utils.js';
+import type { CommandHandler, CommandContext, CommandResult, CommandError } from '../shared/types.js';
+import { success, error } from '../shared/utils.js';
 
 const DESCRIPTION = 'Export session data to JSON';
 
@@ -99,7 +99,7 @@ export const exportCommand: CommandHandler = async (context: CommandContext): Pr
   try {
     const { writeFileSync } = await import('node:fs');
     const core = await import('@ttm/core');
-    const { formatKeyValueLine } = await import('../output.js');
+    const { formatKeyValueLine } = await import('../shared/output.js');
 
     const database = new core.TtmDatabase();
     const readService = new core.TtmReadService(database);

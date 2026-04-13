@@ -1,4 +1,4 @@
-import type { CliCommand } from './types.js';
+import type { CliCommand } from '../shared/types.js';
 
 export const COMMANDS: Record<CliCommand, string> = {
   doctor: 'DoctorCommand',

@@ -1,8 +1,8 @@
-import { existsSync } from 'node:fs';
-import type { TtmReadService } from '@ttm/core';
-import type { MonitoringPreferences } from './preferences.js';
-import type { DatabaseResolutionConfig } from './env-config.js';
-import { RUNTIME_STARTED_AT } from './env-config.js';
+import { existsSync } from "node:fs";
+import type { TtmReadService } from "@ttm/core";
+import type { MonitoringPreferences } from "../shell/preferences.js";
+import type { DatabaseResolutionConfig } from "./env-config.js";
+import { RUNTIME_STARTED_AT } from "./env-config.js";
 
 export interface DesktopRuntimeStatus {
   runtimeMode: string;
@@ -10,7 +10,7 @@ export interface DesktopRuntimeStatus {
   ownerPath: string;
   port: number;
   databasePath: string;
-  databaseSource: DatabaseResolutionConfig['source'];
+  databaseSource: DatabaseResolutionConfig["source"];
   canonicalDatabasePath: string;
   legacyDatabasePath: string | null;
   migrationPerformed: boolean;
@@ -24,7 +24,7 @@ export interface DesktopRuntimeStatus {
 
 export interface DatabasePathResolution {
   path: string;
-  source: DatabaseResolutionConfig['source'];
+  source: DatabaseResolutionConfig["source"];
   canonicalPath: string;
   legacyPath: string | null;
   migrationPerformed: boolean;
@@ -32,7 +32,9 @@ export interface DatabasePathResolution {
 
 let desktopDatabaseResolution: DatabasePathResolution | null = null;
 
-export function setDesktopDatabaseResolution(resolution: DatabasePathResolution): void {
+export function setDesktopDatabaseResolution(
+  resolution: DatabasePathResolution,
+): void {
   desktopDatabaseResolution = resolution;
 }
 
@@ -49,17 +51,17 @@ export function getRuntimeStatus(
   const analytics = readService.getAnalyticsSnapshot(analyticsWindowDays);
   const resolution = desktopDatabaseResolution ?? {
     path: summary.databasePath,
-    source: 'explicit' as const,
+    source: "explicit" as const,
     canonicalPath: summary.databasePath,
     legacyPath: null,
     migrationPerformed: false,
   };
 
   return {
-    runtimeMode: process.env.TTM_DESKTOP_RUNTIME ?? 'dev',
-    instanceToken: process.env.TTM_RUNTIME_INSTANCE_TOKEN ?? 'dev-runtime',
-    ownerPath: process.env.TTM_RUNTIME_OWNER_PATH ?? '',
-    port: Number(process.env.TTM_DESKTOP_PORT ?? '3100'),
+    runtimeMode: process.env.TTM_DESKTOP_RUNTIME ?? "dev",
+    instanceToken: process.env.TTM_RUNTIME_INSTANCE_TOKEN ?? "dev-runtime",
+    ownerPath: process.env.TTM_RUNTIME_OWNER_PATH ?? "",
+    port: Number(process.env.TTM_DESKTOP_PORT ?? "3100"),
     databasePath: summary.databasePath,
     databaseSource: resolution.source,
     canonicalDatabasePath: resolution.canonicalPath,

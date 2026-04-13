@@ -1,5 +1,5 @@
 import { TTM_PRIVACY_POLICY } from "@ttm/core";
-import type { GitHubUser, Membership } from "../routes.js";
+import type { GitHubUser, Membership } from "../routing/routes.js";
 
 export const STYLES = `
   * { box-sizing: border-box; }
@@ -129,7 +129,9 @@ export function buildBrandLockup(label = "Token Tracker"): string {
   </span>`;
 }
 
-export function buildWebNav(active: "home" | "settings" | "leaderboard"): string {
+export function buildWebNav(
+  active: "home" | "settings" | "leaderboard",
+): string {
   return `<nav class="nav">
     <span class="nav-brand">${buildBrandLockup("Token Tracker")}</span>
     <a href="/"${active === "home" ? ' class="active"' : ""}>Home</a>
@@ -138,7 +140,9 @@ export function buildWebNav(active: "home" | "settings" | "leaderboard"): string
   </nav>`;
 }
 
-export function renderStatusBadge(status: "connected" | "opted-in" | "disconnected" | "opted-out"): string {
+export function renderStatusBadge(
+  status: "connected" | "opted-in" | "disconnected" | "opted-out",
+): string {
   const className = `status-badge status-${status}`;
   const label = {
     connected: "Connected",

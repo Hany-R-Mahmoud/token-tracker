@@ -1,5 +1,5 @@
-import type { CommandHandler, CommandContext, CommandResult, CommandError } from './types.js';
-import { success, error } from './utils.js';
+import type { CommandHandler, CommandContext, CommandResult, CommandError } from '../shared/types.js';
+import { success, error } from '../shared/utils.js';
 
 const DESCRIPTION = 'List known providers and their status';
 

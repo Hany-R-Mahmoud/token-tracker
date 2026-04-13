@@ -1,5 +1,5 @@
-import type { CommandHandler, CommandContext, CommandResult, CommandError } from './types.js';
-import { success, error } from './utils.js';
+import type { CommandHandler, CommandContext, CommandResult, CommandError } from '../shared/types.js';
+import { success, error } from '../shared/utils.js';
 import type { ReferenceAppId } from '@ttm/core';
 
 const DESCRIPTION = 'Compare local readings against reference app snapshots';
@@ -181,7 +181,7 @@ export const compareSnapshotCommand: CommandHandler = async (context: CommandCon
   try {
     const { writeFileSync, mkdirSync } = await import('node:fs');
     const core = await import('@ttm/core');
-    const { formatKeyValueLine } = await import('../output.js');
+    const { formatKeyValueLine } = await import('../shared/output.js');
 
     const database = new core.TtmDatabase();
     const readService = new core.TtmReadService(database);

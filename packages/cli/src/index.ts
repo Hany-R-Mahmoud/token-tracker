@@ -1,12 +1,16 @@
-import { doctorCommand } from './commands/doctor.js';
-import { providersCommand } from './commands/providers.js';
-import { summaryCommand } from './commands/summary.js';
-import { importCommand } from './commands/import.js';
-import { exportCommand } from './commands/export.js';
-import { compareSnapshotCommand } from './commands/compare-snapshot.js';
-import { isValidCommand, resolveCommandName } from './commands/registry.js';
-import type { ExtendedCliCommand, CommandContext } from './commands/types.js';
-import type { CommandResult, CommandError } from './commands/types.js';
+import { doctorCommand } from "./commands/doctor.js";
+import { providersCommand } from "./commands/providers.js";
+import { summaryCommand } from "./commands/summary.js";
+import { importCommand } from "./commands/import.js";
+import { exportCommand } from "./commands/export.js";
+import { compareSnapshotCommand } from "./commands/compare-snapshot.js";
+import { isValidCommand, resolveCommandName } from "./commands/registry.js";
+import type {
+  ExtendedCliCommand,
+  CommandContext,
+  CommandResult,
+  CommandError,
+} from "./shared/types.js";
 
 function printSessions(args: string[]): void {
   const filters = parseSessionFilters(args);
@@ -15,8 +19,8 @@ function printSessions(args: string[]): void {
     return;
   }
 
-  const { TtmDatabase, TtmReadService } = require('@ttm/core');
-  const { formatKeyValueLine, formatSessionRow } = require('./output.js');
+  const { TtmDatabase, TtmReadService } = require("@ttm/core");
+  const { formatKeyValueLine, formatSessionRow } = require("./shared/output.js");
 
   const database = new TtmDatabase();
   const readService = new TtmReadService(database);
@@ -26,9 +30,11 @@ function printSessions(args: string[]): void {
   });
 
   if (filters.provider) {
-    process.stdout.write(`${formatKeyValueLine('provider filter', filters.provider)}\n`);
+    process.stdout.write(
+      `${formatKeyValueLine("provider filter", filters.provider)}\n`,
+    );
   }
-  process.stdout.write(`${formatKeyValueLine('limit', filters.limit)}\n`);
+  process.stdout.write(`${formatKeyValueLine("limit", filters.limit)}\n`);
 
   for (const session of sessions) {
     process.stdout.write(`${formatSessionRow(session)}\n`);
@@ -37,12 +43,12 @@ function printSessions(args: string[]): void {
 
 function printSessionAnalysis(sessionId: string | null): void {
   if (!sessionId) {
-    process.stdout.write('usage: ttm analyze <session-id>\n');
+    process.stdout.write("usage: ttm analyze <session-id>\n");
     return;
   }
 
-  const { TtmDatabase, TtmReadService } = require('@ttm/core');
-  const { formatSessionDetailLines } = require('./output.js');
+  const { TtmDatabase, TtmReadService } = require("@ttm/core");
+  const { formatSessionDetailLines } = require("./shared/output.js");
 
   const database = new TtmDatabase();
   const readService = new TtmReadService(database);
@@ -57,7 +63,9 @@ function printSessionAnalysis(sessionId: string | null): void {
   }
 
   if (session.pricingSnapshotId === null) {
-    process.stdout.write('pricing_note: total cost is not available because this model has no trusted pricing snapshot\n');
+    process.stdout.write(
+      "pricing_note: total cost is not available because this model has no trusted pricing snapshot\n",
+    );
   }
 }
 
@@ -67,40 +75,44 @@ function runCommand(command: string, args: string[]): void {
   if (isValidCommand(command)) {
     const runHandler = async () => {
       switch (command) {
-        case 'doctor':
+        case "doctor":
           return doctorCommand(context);
-        case 'providers':
+        case "providers":
           return providersCommand(context);
-        case 'summary':
+        case "summary":
           return summaryCommand(context);
-        case 'import':
+        case "import":
           return importCommand(context);
-        case 'export':
+        case "export":
           return exportCommand(context);
-        case 'compare-snapshot':
+        case "compare-snapshot":
           return compareSnapshotCommand(context);
         default:
-          return { ok: false, errors: ['Unknown command'] };
+          return { ok: false, errors: ["Unknown command"] };
       }
     };
 
     runHandler().then((result) => {
       if ((result as any).ok) {
-        (result as any).output.forEach((line: string) => process.stdout.write(`${line}\n`));
+        (result as any).output.forEach((line: string) =>
+          process.stdout.write(`${line}\n`),
+        );
       } else {
-        (result as any).errors.forEach((line: string) => process.stderr.write(`${line}\n`));
+        (result as any).errors.forEach((line: string) =>
+          process.stderr.write(`${line}\n`),
+        );
         process.exit(1);
       }
     });
     return;
   }
 
-  if (command === 'sessions') {
+  if (command === "sessions") {
     printSessions(args);
     return;
   }
 
-  if (command === 'analyze') {
+  if (command === "analyze") {
     printSessionAnalysis(args[0] ?? null);
     return;
   }
@@ -109,13 +121,21 @@ function runCommand(command: string, args: string[]): void {
 }
 
 function printHelp(): void {
-  process.stdout.write('usage: ttm <doctor|providers|import|summary|export|compare-snapshot|sessions|analyze>\n');
-  process.stdout.write('export args: [output-path] [--days <count>]\n');
-  process.stdout.write('compare-snapshot args: --provider <id> [output-path] [--reference-app <app>] [--ref-sessions <n>] [--ref-tokens <n>] [--ref-cost_usd <n>] [--ref-efficiency <n>] [--ref-reset-window <str>]\n');
-  process.stdout.write('sessions flags: [--provider <provider>] [--limit <count>]\n');
+  process.stdout.write(
+    "usage: ttm <doctor|providers|import|summary|export|compare-snapshot|sessions|analyze>\n",
+  );
+  process.stdout.write("export args: [output-path] [--days <count>]\n");
+  process.stdout.write(
+    "compare-snapshot args: --provider <id> [output-path] [--reference-app <app>] [--ref-sessions <n>] [--ref-tokens <n>] [--ref-cost_usd <n>] [--ref-efficiency <n>] [--ref-reset-window <str>]\n",
+  );
+  process.stdout.write(
+    "sessions flags: [--provider <provider>] [--limit <count>]\n",
+  );
 }
 
-function parseSessionFilters(args: string[]):
+function parseSessionFilters(
+  args: string[],
+):
   | { ok: true; provider: string | undefined; limit: number }
   | { ok: false; message: string } {
   let provider: string | undefined;
@@ -124,21 +144,28 @@ function parseSessionFilters(args: string[]):
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
 
-    if (arg === '--provider') {
+    if (arg === "--provider") {
       const value = args[index + 1];
       if (!value) {
-        return { ok: false, message: 'usage: ttm sessions [--provider <provider>] [--limit <count>]' };
+        return {
+          ok: false,
+          message:
+            "usage: ttm sessions [--provider <provider>] [--limit <count>]",
+        };
       }
       provider = value;
       index += 1;
       continue;
     }
 
-    if (arg === '--limit') {
+    if (arg === "--limit") {
       const value = args[index + 1];
       const parsed = value ? Number(value) : Number.NaN;
       if (!value || !Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
-        return { ok: false, message: 'limit must be an integer between 1 and 100' };
+        return {
+          ok: false,
+          message: "limit must be an integer between 1 and 100",
+        };
       }
       limit = parsed;
       index += 1;
@@ -152,11 +179,13 @@ function parseSessionFilters(args: string[]):
 }
 
 async function main(): Promise<void> {
-  const command = (process.argv[2] ?? 'doctor') as ExtendedCliCommand;
+  const command = (process.argv[2] ?? "doctor") as ExtendedCliCommand;
   runCommand(command, process.argv.slice(3));
 }
 
 main().catch((err) => {
-  process.stderr.write(`fatal: ${err instanceof Error ? err.message : String(err)}\n`);
+  process.stderr.write(
+    `fatal: ${err instanceof Error ? err.message : String(err)}\n`,
+  );
   process.exit(1);
 });

@@ -1,5 +1,5 @@
-import type { LeaderboardDatabase } from './db.js';
-import type { TtmDatabase } from '@ttm/core';
+import type { LeaderboardDatabase } from "../storage/db.js";
+import type { TtmDatabase } from "@ttm/core";
 
 export interface SyncResult {
   syncedSessions: number;
