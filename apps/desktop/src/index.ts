@@ -473,7 +473,7 @@ function buildOverviewHero(
     : null;
   const truthTone = activeSurfacePanel?.resolution
     ? tierLabel(activeSurfacePanel.resolution.resolutionTier)
-    : 'Fallback';
+    : 'latest session fallback';
   const riskCount = (contextHealth?.nearLimitCount ?? 0) + (contextHealth?.toolHeavyCount ?? 0);
   const latencyMs = recentSessions.length > 0
     ? Math.max(12, Math.round(recentSessions.reduce((sum, session) => sum + ((Math.log10(session.tokenTotal + 1) * 8) + 6), 0) / recentSessions.length))
@@ -481,13 +481,16 @@ function buildOverviewHero(
   const syncLag = activeSurfacePanel?.usagePercent != null
     ? `${activeSurfacePanel.usagePercent.toFixed(0)}% pressure`
     : 'stable sync';
+  const statusSummary = riskCount > 0
+    ? `${riskCount} risk vector${riskCount === 1 ? '' : 's'} require${riskCount === 1 ? 's' : ''} attention`
+    : 'All systems nominal';
 
   return `<section class="operational-band">
     <div class="operational-copy">
       <div class="status-dot"></div>
       <div class="eyebrow">System Core</div>
       <h2 class="tooltip" data-tooltip="Current operational status and activity">Operational</h2>
-      <p>Active-surface consensus is ${escapeHtml(truthTone.toLowerCase())}. ${riskCount > 0 ? `${riskCount} risk vectors are elevated.` : 'No critical anomalies are forcing operator intervention.'}</p>
+      <p>${statusSummary} — ${escapeHtml(truthTone)} session health</p>
       <div class="operational-meta">
         <span>Latency ${latencyMs}ms</span>
         <span>${snapshot.sessionCount} sessions</span>
@@ -504,50 +507,56 @@ function buildOverviewKpiDeck(
   recentSessions: StoredSessionListItem[],
   contextHealth: { nearLimitCount: number; toolHeavyCount: number; topSessions: { id: string; title: string | null; providerSessionId: string; contextPercent: number | null }[] } | null,
 ): string {
+  const totalTokens = snapshot.providerSummaries.reduce((sum, p) => sum + p.totalTokens, 0);
+  const totalCost = snapshot.providerSummaries.reduce((sum, p) => sum + p.totalCostUsd, 0);
+  const totalSessions = snapshot.sessionCount;
+  const avgTokensPerSession = totalSessions > 0 ? Math.round(totalTokens / totalSessions) : 0;
+  
+  const providersWithSuccess = snapshot.providerSummaries.filter((p) => p.averageSuccessScore !== null);
+  const avgSuccessScore = providersWithSuccess.length > 0
+    ? Math.round(providersWithSuccess.reduce((sum, p) => sum + (p.averageSuccessScore ?? 0), 0) / providersWithSuccess.length)
+    : null;
+  
+  const topProvider = snapshot.providerSummaries.slice().sort((a, b) => b.totalTokens - a.totalTokens)[0];
+  
   const recentTokens = recentSessions.slice(0, 7).reverse().map((session) => session.tokenTotal);
-  const latencyBaseline = recentSessions.length > 0
-    ? recentSessions.reduce((sum, session) => sum + ((Math.log10(session.tokenTotal + 1) * 8) + 6), 0) / recentSessions.length
-    : 42.8;
-  const networkLoad = snapshot.providerSummaries.length > 0
-    ? clampNumber(Math.log10(snapshot.providerSummaries.reduce((sum, summary) => sum + summary.totalTokens, 0) + 1) * 7.4, 18, 96)
-    : 64.2;
-  const anomalyBase = recentSessions.filter((session) => session.outcome !== 'success' && session.outcome !== 'unknown').length;
-  const anomalyRate = recentSessions.length > 0
-    ? clampNumber(((Math.min(contextHealth?.nearLimitCount ?? 0, recentSessions.length) + anomalyBase) / recentSessions.length) * 100, 0, 99)
-    : 0;
 
   const cards = [
     {
-      label: 'Throughput',
-      delta: `+${Math.max(4.2, snapshot.sessionCount / 10).toFixed(1)}%`,
-      value: formatNumber(snapshot.sessionCount * 184),
-      suffix: 'req/s',
+      label: 'Total Sessions',
+      delta: totalSessions > 0 ? 'active' : 'none',
+      value: formatNumber(totalSessions),
+      suffix: 'sessions',
+      className: '',
+      chart: buildMiniBars(recentTokens.slice(0, 5), 'var(--accent)'),
+    },
+    {
+      label: 'Total Cost',
+      delta: totalCost > 0 ? 'this period' : 'no cost',
+      value: totalCost > 0 ? `$${totalCost.toFixed(2)}` : '$0.00',
+      suffix: '',
+      className: totalCost > 0 ? '' : 'kpi-card-muted',
+      chart: '',
+    },
+    {
+      label: 'Total Tokens',
+      delta: totalTokens > 0 ? 'this period' : 'none',
+      value: formatNumber(totalTokens),
+      suffix: 'tokens',
       className: '',
       chart: buildMiniBars(recentTokens, 'var(--accent)'),
     },
     {
-      label: 'P99 Latency',
-      delta: `-${Math.max(1.8, latencyBaseline / 12).toFixed(1)}ms`,
-      value: latencyBaseline.toFixed(1),
-      suffix: 'ms',
-      className: '',
-      chart: '<div class="line-meter" role="progressbar" aria-valuenow="74" aria-valuemin="0" aria-valuemax="100" aria-label="P99 Latency capacity"><span style="width:74%"></span></div>',
-    },
-    {
-      label: 'Network Load',
-      delta: 'stable',
-      value: networkLoad.toFixed(1),
-      suffix: '%cap',
-      className: '',
-      chart: `<div class="capsule-grid">${Array.from({ length: 8 }, (_, index) => `<span style="height:${36 + ((index * 11) % 46)}%"></span>`).join('')}</div>`,
-    },
-    {
-      label: 'Anomalies',
-      delta: anomalyRate < 0.08 ? 'nominal' : 'inspect',
-      value: anomalyRate.toFixed(2),
-      suffix: '%rate',
-      className: 'kpi-card-hatched',
-      chart: '<div class="fault-line"></div>',
+      label: avgSuccessScore !== null ? 'Success Rate' : 'Avg Session Size',
+      delta: avgSuccessScore !== null 
+        ? (avgSuccessScore >= 70 ? 'productive' : avgSuccessScore >= 40 ? 'mixed' : 'low')
+        : 'avg',
+      value: avgSuccessScore !== null ? `${avgSuccessScore}%` : formatNumber(avgTokensPerSession),
+      suffix: avgSuccessScore !== null ? '' : 'tokens',
+      className: avgSuccessScore !== null 
+        ? (avgSuccessScore >= 70 ? 'kpi-card-success' : avgSuccessScore >= 40 ? 'kpi-card-warning' : 'kpi-card-danger')
+        : '',
+      chart: '',
     },
   ];
 
@@ -951,7 +960,6 @@ function buildOverviewHtml(snapshot: ReadSummarySnapshot, sessions: StoredSessio
   ${buildDesktopNav('overview', { showRefreshIndicator: true })}
   <main id="main-content">
   <h1>Overview</h1>
-  <p class="subtitle">Database: <code>${escapeHtml(snapshot.databasePath)}</code></p>
 
   ${buildOverviewHero(snapshot, sessions, totalTokens, totalCost, contextHealth, activeSurfacePanel, activePeriod)}
   ${buildOverviewKpiDeck(snapshot, sessions, contextHealth)}

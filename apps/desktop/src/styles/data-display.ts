@@ -448,6 +448,18 @@ export const DATA_DISPLAY = `
       linear-gradient(180deg, rgba(176, 21, 34, 0.06), rgba(176, 21, 34, 0)),
       var(--bg-secondary);
   }
+  .kpi-card-success {
+    border-color: var(--success);
+  }
+  .kpi-card-warning {
+    border-color: var(--warning);
+  }
+  .kpi-card-danger {
+    border-color: var(--danger);
+  }
+  .kpi-card-muted {
+    opacity: 0.6;
+  }
   .kinetic-kpi-head {
     display: flex;
     justify-content: space-between;
